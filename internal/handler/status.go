@@ -433,14 +433,15 @@ func GetSystemEnv(cfg *config.Config) gin.HandlerFunc {
 
 // detectOpenClaw 检测 OpenClaw 版本
 func detectOpenClaw(cfg *config.Config) string {
-	ocConfig, err := cfg.ReadOpenClawJSON()
-	if err != nil {
+	ver := detectOpenClawVersion(cfg)
+	if ver == "" {
 		return "not found"
 	}
-	if meta, ok := ocConfig["meta"].(map[string]interface{}); ok {
-		if ver, ok := meta["lastTouchedVersion"].(string); ok {
-			return "v" + ver
-		}
+	if ver == "installed" {
+		return "installed (config found)"
 	}
-	return "installed (config found)"
+	if !strings.HasPrefix(ver, "v") {
+		return "v" + ver
+	}
+	return ver
 }

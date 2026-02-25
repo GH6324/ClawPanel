@@ -150,19 +150,106 @@ func boolStatus(installed bool) string {
 }
 
 func detectOpenClawVersion(cfg *config.Config) string {
-	// Try from config
+	// 1. Try openclaw CLI (covers npm global, manual install, any PATH-accessible install)
+	ver := detectCmd("openclaw", "--version")
+	if ver != "" {
+		return strings.TrimPrefix(strings.TrimSpace(ver), "v")
+	}
+
+	// 2. Try from config meta.lastTouchedVersion
 	ocConfig, _ := cfg.ReadOpenClawJSON()
 	if ocConfig != nil {
 		if meta, ok := ocConfig["meta"].(map[string]interface{}); ok {
-			if v, ok := meta["lastTouchedVersion"].(string); ok {
+			if v, ok := meta["lastTouchedVersion"].(string); ok && v != "" {
 				return v
 			}
 		}
 	}
-	// Try CLI
-	ver := detectCmd("openclaw", "--version")
-	if ver != "" {
-		return ver
+
+	// 3. Try npm global: read package.json from npm root
+	npmRoot := detectCmd("npm", "root", "-g")
+	if npmRoot != "" {
+		pkgPath := filepath.Join(npmRoot, "openclaw", "package.json")
+		if v := readVersionFromPackageJSON(pkgPath); v != "" {
+			return v
+		}
+	}
+
+	// 4. Try common binary paths
+	commonPaths := []string{
+		"/usr/local/bin/openclaw",
+		"/usr/bin/openclaw",
+		filepath.Join(os.Getenv("HOME"), ".local/bin/openclaw"),
+		filepath.Join(os.Getenv("HOME"), ".npm-global/bin/openclaw"),
+	}
+	for _, p := range commonPaths {
+		if _, err := os.Stat(p); err == nil {
+			out := detectCmd(p, "--version")
+			if out != "" {
+				return strings.TrimPrefix(strings.TrimSpace(out), "v")
+			}
+		}
+	}
+
+	// 5. Try source installs: check common directories for package.json
+	sourcePaths := []string{
+		filepath.Join(os.Getenv("HOME"), "openclaw"),
+		filepath.Join(os.Getenv("HOME"), "openclaw/app"),
+		"/opt/openclaw",
+		"/usr/lib/node_modules/openclaw",
+	}
+	for _, sp := range sourcePaths {
+		pkgPath := filepath.Join(sp, "package.json")
+		if v := readVersionFromPackageJSON(pkgPath); v != "" {
+			return v
+		}
+	}
+
+	// 6. Try Docker container
+	dockerVer := detectCmd("docker", "exec", "openclaw", "openclaw", "--version")
+	if dockerVer != "" {
+		return strings.TrimPrefix(strings.TrimSpace(dockerVer), "v")
+	}
+
+	// 7. Try systemd: parse ExecStart from service file to find binary path
+	svcContent := detectCmd("systemctl", "cat", "openclaw")
+	if svcContent != "" {
+		for _, line := range strings.Split(svcContent, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "ExecStart=") {
+				parts := strings.Fields(strings.TrimPrefix(line, "ExecStart="))
+				if len(parts) > 0 {
+					bin := parts[0]
+					out := detectCmd(bin, "--version")
+					if out != "" {
+						return strings.TrimPrefix(strings.TrimSpace(out), "v")
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// 8. Config file exists but no version extractable
+	if ocConfig != nil {
+		return "installed"
+	}
+
+	return ""
+}
+
+// readVersionFromPackageJSON reads the "version" field from a package.json file
+func readVersionFromPackageJSON(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var pkg map[string]interface{}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return ""
+	}
+	if v, ok := pkg["version"].(string); ok && v != "" {
+		return v
 	}
 	return ""
 }

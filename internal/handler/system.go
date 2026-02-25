@@ -13,9 +13,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
+	"github.com/zhaoxinyi02/ClawPanel/internal/update"
 )
 
-// GetVersion 获取版本信息
+// GetVersion 获取 OpenClaw 版本信息
 func GetVersion(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ocConfig, _ := cfg.ReadOpenClawJSON()
@@ -51,6 +52,16 @@ func GetVersion(cfg *config.Config) gin.HandlerFunc {
 			"latestVersion":   latestVersion,
 			"lastCheckedAt":   lastCheckedAt,
 			"updateAvailable": updateAvailable,
+		})
+	}
+}
+
+// GetPanelVersion 获取 ClawPanel 面板版本
+func GetPanelVersion(version string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"version": version,
 		})
 	}
 }
@@ -204,7 +215,7 @@ func RestartGatewayStatus(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// CheckUpdate 检查更新
+// CheckUpdate 检查 OpenClaw 更新
 func CheckUpdate(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ocConfig, _ := cfg.ReadOpenClawJSON()
@@ -259,13 +270,12 @@ func CheckUpdate(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// DoUpdate 执行更新
+// DoUpdate 执行 OpenClaw 更新
 func DoUpdate(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		signalPath := filepath.Join(cfg.OpenClawDir, "update-signal.json")
 		resultPath := filepath.Join(cfg.OpenClawDir, "update-result.json")
 
-		// 检查是否正在更新
 		if data, err := os.ReadFile(resultPath); err == nil {
 			var result map[string]interface{}
 			json.Unmarshal(data, &result)
@@ -291,7 +301,7 @@ func DoUpdate(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// UpdateStatus 获取更新状态
+// UpdateStatus 获取 OpenClaw 更新状态
 func UpdateStatus(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		resultPath := filepath.Join(cfg.OpenClawDir, "update-result.json")
@@ -306,7 +316,6 @@ func UpdateStatus(cfg *config.Config) gin.HandlerFunc {
 		var result map[string]interface{}
 		json.Unmarshal(data, &result)
 
-		// 尝试读取实时日志
 		var logLines []string
 		if logData, err := os.ReadFile(logPath); err == nil {
 			content := strings.TrimSpace(string(logData))
@@ -334,5 +343,90 @@ func UpdateStatus(cfg *config.Config) gin.HandlerFunc {
 			"startedAt":  result["startedAt"],
 			"finishedAt": result["finishedAt"],
 		})
+	}
+}
+
+// CheckPanelUpdate 检查 ClawPanel 面板自身更新（国内加速服务器）
+func CheckPanelUpdate(updater *update.Updater) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		info, hasUpdate, err := updater.CheckUpdate()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":            true,
+			"hasUpdate":     hasUpdate,
+			"latestVersion": info.LatestVersion,
+			"releaseTime":   info.ReleaseTime,
+			"releaseNote":   info.ReleaseNote,
+		})
+	}
+}
+
+// DoPanelUpdate 执行 ClawPanel 面板自身更新
+func DoPanelUpdate(updater *update.Updater) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Check progress first
+		p := updater.GetProgress()
+		if p.Status == "downloading" || p.Status == "verifying" || p.Status == "replacing" {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": "更新正在进行中"})
+			return
+		}
+
+		// Check for update
+		info, hasUpdate, err := updater.CheckUpdate()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if !hasUpdate {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": "当前已是最新版本"})
+			return
+		}
+
+		// Start async update
+		updater.DoUpdate(info)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "更新已开始"})
+	}
+}
+
+// PanelUpdateProgress 获取面板更新进度
+func PanelUpdateProgress(updater *update.Updater) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p := updater.GetProgress()
+		c.JSON(http.StatusOK, gin.H{
+			"ok":       true,
+			"status":   p.Status,
+			"progress": p.Progress,
+			"message":  p.Message,
+			"log":      p.Log,
+			"error":    p.Error,
+		})
+	}
+}
+
+// GetUpdatePopup 获取更新弹窗信息
+func GetUpdatePopup(updater *update.Updater) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		popup := updater.GetUpdatePopup()
+		if popup == nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "show": false})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":          true,
+			"show":        popup.Show,
+			"version":     popup.Version,
+			"releaseNote": popup.ReleaseNote,
+		})
+	}
+}
+
+// MarkUpdatePopupShown 标记更新弹窗已显示
+func MarkUpdatePopupShown(updater *update.Updater) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		updater.MarkPopupShown()
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }

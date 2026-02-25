@@ -135,6 +135,13 @@ const _api = {
   checkUpdate: () => post('/system/check-update'),
   doUpdate: () => post('/system/do-update'),
   getUpdateStatus: () => get('/system/update-status'),
+  // ClawPanel 面板自检更新
+  getPanelVersion: () => get('/panel/version'),
+  checkPanelUpdate: () => get('/panel/check-update'),
+  doPanelUpdate: () => post('/panel/do-update'),
+  getPanelUpdateProgress: () => get('/panel/update-progress'),
+  getUpdatePopup: () => get('/panel/update-popup'),
+  markUpdatePopupShown: () => post('/panel/update-popup/shown'),
   restartProcess: () => post('/process/restart'),
   restartGateway: () => post('/system/restart-gateway'),
   restartPanel: () => post('/system/restart-panel'),

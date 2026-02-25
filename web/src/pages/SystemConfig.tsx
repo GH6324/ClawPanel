@@ -761,6 +761,9 @@ export default function SystemConfig() {
             <UpdateSection versionInfo={versionInfo} updating={updating} setUpdating={setUpdating} updateStatus={updateStatus} setUpdateStatus={setUpdateStatus} updateLog={updateLog} setUpdateLog={setUpdateLog} checking={checking} setChecking={setChecking} setVersionInfo={setVersionInfo} setMsg={setMsg} loadVersion={loadVersion} />
           </div>
 
+          {/* ClawPanel 面板自检更新 */}
+          <PanelUpdateSection />
+
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -1095,6 +1098,155 @@ function ChangePasswordSection() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function PanelUpdateSection() {
+  const [panelVersion, setPanelVersion] = useState('');
+  const [checkingPanel, setCheckingPanel] = useState(false);
+  const [panelUpdateInfo, setPanelUpdateInfo] = useState<any>(null);
+  const [updatingPanel, setUpdatingPanel] = useState(false);
+  const [panelProgress, setPanelProgress] = useState<any>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    api.getPanelVersion().then(r => { if (r.ok) setPanelVersion(r.version); }).catch(() => {});
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [panelProgress?.log]);
+
+  const checkPanelUpdate = async () => {
+    setCheckingPanel(true);
+    try {
+      const r = await api.checkPanelUpdate();
+      if (r.ok) setPanelUpdateInfo(r);
+      else setPanelUpdateInfo({ error: r.error || '检查失败' });
+    } catch { setPanelUpdateInfo({ error: '网络错误' }); }
+    finally { setCheckingPanel(false); }
+  };
+
+  const doPanelUpdate = async () => {
+    if (!confirm('确定要更新 ClawPanel？更新完成后面板将自动重启。')) return;
+    setUpdatingPanel(true);
+    try {
+      const r = await api.doPanelUpdate();
+      if (!r.ok) { setPanelProgress({ status: 'error', error: r.error, log: ['❌ ' + (r.error || '启动更新失败')] }); setUpdatingPanel(false); return; }
+    } catch { setPanelProgress({ status: 'error', error: '网络错误', log: ['❌ 网络错误'] }); setUpdatingPanel(false); return; }
+    // Poll progress
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const p = await api.getPanelUpdateProgress();
+        if (p.ok) {
+          setPanelProgress(p);
+          if (p.status === 'done' || p.status === 'restarting') {
+            clearInterval(pollRef.current!); pollRef.current = null;
+            // Wait for restart then reload
+            setTimeout(() => {
+              const checkAlive = setInterval(async () => {
+                try {
+                  const r = await fetch('/api/panel/version', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('admin-token') } });
+                  if (r.ok) { clearInterval(checkAlive); window.location.reload(); }
+                } catch {}
+              }, 2000);
+              setTimeout(() => clearInterval(checkAlive), 60000);
+            }, 3000);
+          } else if (p.status === 'error') {
+            clearInterval(pollRef.current!); pollRef.current = null;
+            setUpdatingPanel(false);
+          }
+        }
+      } catch { /* server restarting */ }
+    }, 1000);
+  };
+
+  const isActive = updatingPanel || (panelProgress && ['downloading', 'verifying', 'replacing', 'restarting', 'done'].includes(panelProgress.status));
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-6 space-y-5">
+      <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
+        <Box size={16} className="text-violet-500" /> ClawPanel 面板更新
+        <span className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-gray-900 px-2 py-0.5 rounded ml-1">{panelVersion || '...'}</span>
+        <span className="text-[10px] text-gray-400 ml-auto">🇨🇳 国内加速服务器</span>
+      </h3>
+
+      <div className="flex items-center gap-3">
+        <button onClick={checkPanelUpdate} disabled={checkingPanel || isActive}
+          className="flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 transition-colors">
+          <RefreshCw size={14} className={checkingPanel ? 'animate-spin' : ''} />
+          {checkingPanel ? '检查中...' : '检查更新'}
+        </button>
+
+        {panelUpdateInfo?.hasUpdate && !isActive && (
+          <button onClick={doPanelUpdate}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 shadow-sm shadow-violet-200 dark:shadow-none transition-all hover:shadow-md">
+            <Package size={14} /> 立即更新至 {panelUpdateInfo.latestVersion}
+          </button>
+        )}
+      </div>
+
+      {/* Check result */}
+      {panelUpdateInfo && !panelUpdateInfo.error && !panelUpdateInfo.hasUpdate && !isActive && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-xs text-emerald-700 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-900/30">
+          <CheckCircle size={14} /> 当前已是最新版本
+        </div>
+      )}
+
+      {panelUpdateInfo?.error && !isActive && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 text-xs text-red-700 dark:text-red-300 border border-red-100 dark:border-red-900/30">
+          <AlertTriangle size={14} /> {panelUpdateInfo.error}
+        </div>
+      )}
+
+      {panelUpdateInfo?.hasUpdate && !isActive && panelUpdateInfo.releaseNote && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-xs text-amber-700 dark:text-amber-300 border border-amber-100 dark:border-amber-900/30">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>发现新版本 <strong>{panelUpdateInfo.latestVersion}</strong>（发布于 {panelUpdateInfo.releaseTime}）</span>
+          </div>
+          <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 border border-gray-100 dark:border-gray-800 text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
+            {panelUpdateInfo.releaseNote}
+          </div>
+        </div>
+      )}
+
+      {/* Progress */}
+      {isActive && panelProgress && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">{panelProgress.message || '更新中...'}</span>
+            <span className="text-[10px] font-mono text-gray-400">{panelProgress.progress || 0}%</span>
+          </div>
+          <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+            <div className="h-full bg-violet-500 rounded-full transition-all duration-500" style={{ width: `${panelProgress.progress || 0}%` }} />
+          </div>
+          {panelProgress.log?.length > 0 && (
+            <div ref={logRef} className="bg-gray-900 dark:bg-black rounded-xl p-4 max-h-48 overflow-y-auto font-mono text-[11px] text-gray-300 space-y-0.5 shadow-inner scroll-smooth">
+              {panelProgress.log.map((line: string, i: number) => (
+                <div key={i} className={`break-all border-l-2 pl-2 py-0.5 ${line.includes('✅') ? 'border-emerald-500 text-emerald-400' : line.includes('❌') ? 'border-red-500 text-red-400' : line.includes('📥') || line.includes('🔍') ? 'border-blue-500 text-blue-400' : 'border-gray-700'}`}>
+                  {line}
+                </div>
+              ))}
+              {panelProgress.status !== 'error' && panelProgress.status !== 'done' && <div className="animate-pulse text-violet-400 pl-2 pt-1">▌</div>}
+            </div>
+          )}
+          {panelProgress.status === 'error' && panelProgress.error && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 text-xs text-red-700 dark:text-red-300 border border-red-100 dark:border-red-900/30">
+              <AlertTriangle size={14} /> {panelProgress.error}
+            </div>
+          )}
+          {(panelProgress.status === 'done' || panelProgress.status === 'restarting') && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-violet-50 dark:bg-violet-900/20 text-xs text-violet-700 dark:text-violet-300 border border-violet-100 dark:border-violet-900/30">
+              <RefreshCw size={14} className="animate-spin" /> ClawPanel 正在重启，页面将自动刷新...
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

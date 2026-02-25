@@ -3,6 +3,7 @@ import { useAuth } from './hooks/useAuth';
 import { useWebSocket } from './hooks/useWebSocket';
 import Layout from './components/Layout';
 import OpenClawRequired from './components/OpenClawRequired';
+import UpdatePopup from './components/UpdatePopup';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ActivityLog from './pages/ActivityLog';
@@ -27,6 +28,8 @@ export default function App() {
   }
 
   return (
+    <>
+    <UpdatePopup />
     <Routes>
       <Route element={<Layout onLogout={auth.logout} napcatStatus={ws.napcatStatus} wechatStatus={ws.wechatStatus} openclawStatus={ws.openclawStatus} wsMessages={ws.wsMessages} />}>
         <Route path="/" element={<Dashboard ws={ws} />} />
@@ -48,5 +51,6 @@ export default function App() {
       <Route path="/requests" element={<Navigate to="/channels" />} />
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
+    </>
   );
 }
