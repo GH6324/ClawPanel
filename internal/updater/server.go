@@ -1165,10 +1165,37 @@ func (s *Server) doReplace(tmpFile string) {
 
 func (s *Server) stopPanel() error {
 	if runtime.GOOS == "windows" {
+		// Try service stop first
 		exec.Command("net", "stop", "ClawPanel").Run()
 		time.Sleep(2 * time.Second)
-		// Only kill non-updater clawpanel processes
-		exec.Command("taskkill", "/F", "/IM", "clawpanel.exe").Run()
+
+		// Kill clawpanel.exe processes by PID, excluding ourselves and our parent.
+		// taskkill /IM kills ALL clawpanel.exe including the updater itself — use PID-based kill instead.
+		selfPID := os.Getpid()
+		parentPID := os.Getppid()
+
+		// Use WMIC to list all clawpanel.exe PIDs
+		out, err := exec.Command("wmic", "process", "where", "name='clawpanel.exe'", "get", "processid", "/value").Output()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if !strings.HasPrefix(strings.ToUpper(line), "PROCESSID=") {
+					continue
+				}
+				pidStr := strings.TrimPrefix(strings.TrimPrefix(line, "ProcessId="), "PROCESSID=")
+				pidStr = strings.TrimSpace(pidStr)
+				pid, err := strconv.Atoi(pidStr)
+				if err != nil || pid == 0 {
+					continue
+				}
+				// Skip the updater process and its parent
+				if pid == selfPID || pid == parentPID {
+					continue
+				}
+				exec.Command("taskkill", "/F", "/PID", strconv.Itoa(pid)).Run()
+			}
+		}
+		time.Sleep(1 * time.Second)
 	} else {
 		// Only use systemctl stop — do NOT pkill, as that would kill the updater child process
 		exec.Command("systemctl", "stop", "clawpanel").Run()
