@@ -50,6 +50,14 @@ Unified configuration for **20+ channels** with one-click enable/disable:
 - **JSON Mode**: Direct editing of full configuration JSON
 - Auto-injects `compat.supportsDeveloperRole=false` for non-OpenAI providers
 
+### Multi-Agent Console (v5.1.0+)
+- Agent lifecycle management: create / edit / delete / default agent selection
+- Bindings editor with **structured form + advanced JSON mode**
+- Channel-aware account routing: reads `channels.<channel>.accounts/defaultAccount` and assists `accountId` selection
+- Route preview supports `channel/sender/peer/parentPeer/guildId/teamId/accountId/roles`
+- Preview semantics aligned with OpenClaw: bindings without `accountId` only match the channel default account
+- Sessions page supports `agent=all`, and cron jobs support selectable `sessionTarget`
+
 ### Skill Center + Plugin Management
 - Skills/plugins separated view with search and filter
 - One-click enable/disable, real-time scanning of installed skills

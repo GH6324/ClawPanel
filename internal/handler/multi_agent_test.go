@@ -248,6 +248,68 @@ func TestPreviewRoutePrefersHigherPriorityOverRuleOrder(t *testing.T) {
 	}
 }
 
+func TestPreviewRouteChannelOnlyBindingUsesDefaultAccountScope(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "work",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main"},
+				map[string]interface{}{"id": "work"},
+			},
+		},
+		"channels": map[string]interface{}{
+			"discord": map[string]interface{}{
+				"accounts": map[string]interface{}{
+					"default": map[string]interface{}{},
+					"coding":  map[string]interface{}{},
+				},
+			},
+		},
+		"bindings": []interface{}{
+			map[string]interface{}{
+				"agentId": "main",
+				"enabled": true,
+				"match": map[string]interface{}{
+					"channel": "discord",
+				},
+			},
+		},
+	})
+
+	r := gin.New()
+	r.POST("/route/preview", PreviewOpenClawRoute(cfg))
+	req := httptest.NewRequest(http.MethodPost, "/route/preview", bytes.NewReader([]byte(`{"meta":{"channel":"discord","accountId":"coding"}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Agent string   `json:"agent"`
+			Trace []string `json:"trace"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result.Agent != "work" {
+		t.Fatalf("expected fallback to default agent work when account mismatch, got %s", resp.Result.Agent)
+	}
+	joined := strings.Join(resp.Result.Trace, "\n")
+	if !strings.Contains(joined, "mismatch implicit default account") {
+		t.Fatalf("trace should mention implicit default account mismatch, got: %s", joined)
+	}
+}
+
 func TestSaveBindingsRequiresChannelField(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)

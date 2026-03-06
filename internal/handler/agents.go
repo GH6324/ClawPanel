@@ -377,7 +377,8 @@ func PreviewOpenClawRoute(cfg *config.Config) gin.HandlerFunc {
 			defaultID = "main"
 		}
 
-		resultAgent, matchedBy, trace := evaluateRoutePreview(req.Meta, getBindingsFromConfig(ocConfig, agentsCfg), defaultID)
+		channelDefaultAccounts := collectChannelDefaultAccounts(ocConfig)
+		resultAgent, matchedBy, trace := evaluateRoutePreview(req.Meta, getBindingsFromConfig(ocConfig, agentsCfg), defaultID, channelDefaultAccounts)
 		c.JSON(http.StatusOK, gin.H{
 			"ok": true,
 			"result": gin.H{
@@ -426,7 +427,7 @@ type routePreviewCandidate struct {
 	priorityKey string
 }
 
-func evaluateRoutePreview(meta map[string]interface{}, bindings []map[string]interface{}, defaultAgent string) (string, string, []string) {
+func evaluateRoutePreview(meta map[string]interface{}, bindings []map[string]interface{}, defaultAgent string, channelDefaultAccounts map[string]string) (string, string, []string) {
 	if isLegacySingleAgentMode() {
 		return "main", "legacy-single-agent", []string{"LEGACY_SINGLE_AGENT=true", "fallback main"}
 	}
@@ -461,6 +462,10 @@ func evaluateRoutePreview(meta map[string]interface{}, bindings []map[string]int
 			trace = append(trace, fmt.Sprintf("bindings[%d] %s", i, reason))
 			continue
 		}
+		if ok, reason := matchImplicitDefaultAccount(meta, match, channelDefaultAccounts); !ok {
+			trace = append(trace, fmt.Sprintf("bindings[%d] %s", i, reason))
+			continue
+		}
 		priority, priorityKey := bindingMatchPriority(match)
 		trace = append(trace, fmt.Sprintf("hit bindings[%d]: priority %s", i, priorityLabel(priorityKey)))
 		candidates = append(candidates, routePreviewCandidate{
@@ -488,6 +493,98 @@ func evaluateRoutePreview(meta map[string]interface{}, bindings []map[string]int
 	}
 	trace = append(trace, "fallback default")
 	return defaultAgent, "default", trace
+}
+
+func collectChannelDefaultAccounts(ocConfig map[string]interface{}) map[string]string {
+	result := map[string]string{}
+	if ocConfig == nil {
+		return result
+	}
+	channels, _ := ocConfig["channels"].(map[string]interface{})
+	if channels == nil {
+		return result
+	}
+
+	for channelID, raw := range channels {
+		ch, _ := raw.(map[string]interface{})
+		if ch == nil {
+			continue
+		}
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
+		}
+		if accountID := resolveChannelDefaultAccountID(ch); accountID != "" {
+			result[channelID] = accountID
+		}
+	}
+	return result
+}
+
+func resolveChannelDefaultAccountID(channelCfg map[string]interface{}) string {
+	if channelCfg == nil {
+		return ""
+	}
+	if accountID := strings.TrimSpace(toString(channelCfg["defaultAccount"])); accountID != "" {
+		return accountID
+	}
+	accounts, _ := channelCfg["accounts"].(map[string]interface{})
+	if len(accounts) == 0 {
+		return ""
+	}
+	if _, ok := accounts["default"]; ok {
+		return "default"
+	}
+	keys := make([]string, 0, len(accounts))
+	for key := range accounts {
+		if s := strings.TrimSpace(key); s != "" {
+			keys = append(keys, s)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return ""
+}
+
+func matchImplicitDefaultAccount(meta, match map[string]interface{}, channelDefaultAccounts map[string]string) (bool, string) {
+	if hasMatchField(match, "accountId") {
+		return true, ""
+	}
+	channel, ok := singleLiteralChannel(match)
+	if !ok {
+		return true, ""
+	}
+	defaultAccount := strings.TrimSpace(channelDefaultAccounts[channel])
+	if defaultAccount == "" {
+		return true, ""
+	}
+	actual, ok := readMetaForMatch(meta, "accountId")
+	if !ok {
+		// 预览 meta 未提供 accountId 时，无法确定具体账号，保持兼容。
+		return true, ""
+	}
+	if matchMetaValue(actual, defaultAccount) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("mismatch implicit default account (channel=%s, default=%s)", channel, defaultAccount)
+}
+
+func singleLiteralChannel(match map[string]interface{}) (string, bool) {
+	raw, ok := match["channel"]
+	if !ok {
+		return "", false
+	}
+	channel, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" || strings.ContainsAny(channel, "*?[]") {
+		return "", false
+	}
+	return channel, true
 }
 
 func priorityLabel(key string) string {
