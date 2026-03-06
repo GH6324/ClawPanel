@@ -1049,7 +1049,23 @@ echo "📝 初始化配置..."
 openclaw init 2>/dev/null || true
 
 # 5. Install QQ plugin (OneBot11 channel) if not present
-OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
+# Robust OpenClaw dir resolution for sudo/service environments:
+# - avoid empty HOME -> /.openclaw
+# - auto-fix legacy relative path (.openclaw)
+OPENCLAW_DIR="${OPENCLAW_DIR:-}"
+if [ -z "$OPENCLAW_DIR" ] || [ "$OPENCLAW_DIR" = "/" ] || [ "$OPENCLAW_DIR" = ".openclaw" ]; then
+  if [ -n "${SUDO_USER:-}" ] && command -v dscl &>/dev/null; then
+    UHOME=$(dscl . -read "/Users/${SUDO_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  fi
+  if [ -z "${UHOME:-}" ]; then
+    UHOME="${HOME:-/var/root}"
+  fi
+  OPENCLAW_DIR="${UHOME}/.openclaw"
+fi
+case "$OPENCLAW_DIR" in
+  /*) ;;
+  *) OPENCLAW_DIR="${HOME:-/var/root}/$OPENCLAW_DIR" ;;
+esac
 QQ_EXT_DIR="$OPENCLAW_DIR/extensions/qq"
 if [ ! -d "$QQ_EXT_DIR" ]; then
   echo "📥 安装 QQ (OneBot11) 通道插件..."

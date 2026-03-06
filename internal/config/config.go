@@ -13,21 +13,21 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Port        int    `json:"port"`
-	DataDir     string `json:"dataDir"`
-	OpenClawDir string `json:"openClawDir"`
-	OpenClawApp string `json:"openClawApp"`
+	Port         int    `json:"port"`
+	DataDir      string `json:"dataDir"`
+	OpenClawDir  string `json:"openClawDir"`
+	OpenClawApp  string `json:"openClawApp"`
 	OpenClawWork string `json:"openClawWork"`
-	JWTSecret   string `json:"jwtSecret"`
-	AdminToken  string `json:"adminToken"`
-	Debug       bool   `json:"debug"`
-	mu          sync.RWMutex
+	JWTSecret    string `json:"jwtSecret"`
+	AdminToken   string `json:"adminToken"`
+	Debug        bool   `json:"debug"`
+	mu           sync.RWMutex
 }
 
 const (
-	DefaultPort     = 19527
-	ConfigFileName  = "clawpanel.json"
-	DefaultJWTSecret = "clawpanel-secret-change-me"
+	DefaultPort       = 19527
+	ConfigFileName    = "clawpanel.json"
+	DefaultJWTSecret  = "clawpanel-secret-change-me"
 	DefaultAdminToken = "clawpanel"
 )
 
@@ -84,9 +84,11 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// 跨平台路径校验：如果配置中的路径是另一个 OS 的路径格式，则重新探测
+	// 路径校验：
+	// 1) 如果配置中的路径是另一个 OS 的路径格式，则重新探测
+	// 2) 如果是相对路径（历史版本遗留），统一升级为绝对路径
 	// 例如：Windows 上读到了 /root/.openclaw（Linux 路径），或 Linux 上读到了 C:\... （Windows 路径）
-	if isStaleOSPath(cfg.OpenClawDir) {
+	if isStaleOSPath(cfg.OpenClawDir) || !filepath.IsAbs(cfg.OpenClawDir) {
 		cfg.OpenClawDir = getDefaultOpenClawDir()
 		cfg.OpenClawWork = ""
 		cfg.OpenClawApp = ""
@@ -118,6 +120,14 @@ func Load() (*Config, error) {
 		if cfg.OpenClawApp == "" {
 			cfg.OpenClawApp = filepath.Join(parentDir, "app")
 		}
+	}
+
+	// 历史兼容：将相对路径升级为绝对路径，避免在服务环境下被解析到错误目录
+	if cfg.OpenClawWork != "" && !filepath.IsAbs(cfg.OpenClawWork) {
+		cfg.OpenClawWork = filepath.Join(parentDir, cfg.OpenClawWork)
+	}
+	if cfg.OpenClawApp != "" && !filepath.IsAbs(cfg.OpenClawApp) {
+		cfg.OpenClawApp = filepath.Join(parentDir, cfg.OpenClawApp)
 	}
 
 	// 保存配置（确保文件存在）
@@ -202,7 +212,7 @@ func getDefaultOpenClawDir() string {
 			return c
 		}
 	}
-	
+
 	// If no openclaw.json found, check if npm global openclaw exists
 	// This handles the case where OpenClaw is installed via npm but not yet configured
 	npmGlobalDir := getNpmGlobalOpenClawDir()
@@ -218,7 +228,7 @@ func getDefaultOpenClawDir() string {
 		// For non-Windows or if no user homes found, return home/.openclaw
 		return filepath.Join(home, ".openclaw")
 	}
-	
+
 	// Fallback: return the first candidate that exists as a directory
 	for _, c := range candidates {
 		if info, err := os.Stat(c); err == nil && info.IsDir() {
@@ -235,7 +245,7 @@ func getWindowsUserHomes() []string {
 		return nil
 	}
 	var homes []string
-	
+
 	// Scan C:\Users\* for real user profiles FIRST (prioritize real users)
 	usersDir := `C:\Users`
 	entries, err := os.ReadDir(usersDir)
@@ -252,7 +262,7 @@ func getWindowsUserHomes() []string {
 			}
 		}
 	}
-	
+
 	// Only add USERPROFILE env if it's not a SYSTEM path and not already in list
 	if up := os.Getenv("USERPROFILE"); up != "" {
 		if !strings.Contains(up, "system32") && !strings.Contains(up, "systemprofile") {
@@ -269,7 +279,7 @@ func getWindowsUserHomes() []string {
 			}
 		}
 	}
-	
+
 	return homes
 }
 
