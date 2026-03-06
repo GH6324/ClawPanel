@@ -15,7 +15,7 @@ SERVICE_NAME="clawpanel"
 BINARY_NAME="clawpanel"
 REPO="zhaoxinyi02/ClawPanel"
 PORT="19527"
-DEFAULT_VERSION="5.0.26"
+DEFAULT_VERSION="5.0.27"
 
 # ==================== 自动获取最新版本 ====================
 get_latest_version() {
