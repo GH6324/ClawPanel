@@ -185,6 +185,7 @@ func RejectRequest(cfg *config.Config) gin.HandlerFunc {
 const NAPCAT_WEBUI = "http://127.0.0.1:6099"
 
 var napcatCredential string
+var napcatCredentialToken string
 
 func napcatProxy(method, path string, body interface{}, credential string) (map[string]interface{}, error) {
 	var bodyReader io.Reader
@@ -216,7 +217,9 @@ func napcatProxy(method, path string, body interface{}, credential string) (map[
 
 // readNapCatWebuiToken reads the actual token NapCat is using.
 // NapCat 4.x generates a random token on each startup and logs it as:
-//   [WebUi] WebUi Token: <token>
+//
+//	[WebUi] WebUi Token: <token>
+//
 // So we parse the latest log file to get the live token.
 func readNapCatWebuiToken(cfg *config.Config) string {
 	if runtime.GOOS == "windows" {
@@ -347,19 +350,27 @@ func napcatLoginWithToken(token string) string {
 }
 
 func napcatAuth(cfg *config.Config) string {
+	if napcatCredential != "" {
+		containerToken := readNapCatWebuiToken(cfg)
+		if containerToken == "" || napcatCredentialToken == "" || containerToken == napcatCredentialToken {
+			return napcatCredential
+		}
+		// Token changed after NapCat restart; cached credential is no longer trustworthy.
+		napcatCredential = ""
+		napcatCredentialToken = ""
+	}
+
 	// 1. Try the actual token from NapCat's log (NapCat 4.x generates random token each startup)
 	containerToken := readNapCatWebuiToken(cfg)
 	if containerToken != "" {
 		if cred := napcatLoginWithToken(containerToken); cred != "" {
 			napcatCredential = cred
+			napcatCredentialToken = containerToken
 			return napcatCredential
 		}
 		// Token changed (NapCat restarted) — clear stale credential
 		napcatCredential = ""
-	}
-
-	if napcatCredential != "" {
-		return napcatCredential
+		napcatCredentialToken = ""
 	}
 
 	// 2. Fallback: admin-config or default token (may differ from container)
@@ -376,6 +387,7 @@ func napcatAuth(cfg *config.Config) string {
 	if webuiToken != containerToken {
 		if cred := napcatLoginWithToken(webuiToken); cred != "" {
 			napcatCredential = cred
+			napcatCredentialToken = webuiToken
 			return napcatCredential
 		}
 	}
@@ -412,6 +424,7 @@ func napcatApiCall(cfg *config.Config, method, path string, body interface{}) (m
 	// If unauthorized, clear cache and retry with fresh auth
 	if isNapcatUnauthorized(r) {
 		napcatCredential = ""
+		napcatCredentialToken = ""
 		cred = napcatAuth(cfg)
 		if cred != "" {
 			return napcatProxy(method, path, body, cred)

@@ -56,11 +56,11 @@ type NapCatMonitor struct {
 	maxLogs        int
 	stopCh         chan struct{}
 	running        bool
-	paused         bool          // true when QQ channel is disabled — skip checks
+	paused         bool // true when QQ channel is disabled — skip checks
 	checkInterval  time.Duration
-	reconnecting   bool          // true while a reconnect is in progress
-	offlineCount   int           // consecutive offline checks before triggering reconnect
-	loginFailCount int           // consecutive login check failures before declaring login_expired
+	reconnecting   bool // true while a reconnect is in progress
+	offlineCount   int  // consecutive offline checks before triggering reconnect
+	loginFailCount int  // consecutive login check failures before declaring login_expired
 }
 
 // NewNapCatMonitor creates a new NapCat monitor
@@ -544,29 +544,29 @@ func ensureNapCatNetworkConfig(napcatShellDir string) {
 					"debug":             false,
 				},
 			},
-			"httpSseServers":   []interface{}{},
-			"httpClients":      []interface{}{},
+			"httpSseServers": []interface{}{},
+			"httpClients":    []interface{}{},
 			"websocketServers": []interface{}{
 				map[string]interface{}{
-					"name":                "ClawPanel-WS",
-					"enable":              true,
-					"port":                3001,
-					"host":                "0.0.0.0",
-					"messagePostFormat":   "array",
-					"token":               "",
-					"reportSelfMessage":   false,
+					"name":                 "ClawPanel-WS",
+					"enable":               true,
+					"port":                 3001,
+					"host":                 "0.0.0.0",
+					"messagePostFormat":    "array",
+					"token":                "",
+					"reportSelfMessage":    false,
 					"enableForcePushEvent": true,
-					"debug":               false,
-					"heartInterval":       30000,
+					"debug":                false,
+					"heartInterval":        30000,
 				},
 			},
 			"websocketClients": []interface{}{},
 			"plugins":          []interface{}{},
 		},
-		"musicSignUrl":         "",
-		"enableLocalFile2Url":  false,
-		"parseMultMsg":         false,
-		"imageDownloadProxy":   "",
+		"musicSignUrl":        "",
+		"enableLocalFile2Url": false,
+		"parseMultMsg":        false,
+		"imageDownloadProxy":  "",
 	}
 	data, _ := json.MarshalIndent(networkCfg, "", "  ")
 
@@ -775,7 +775,6 @@ func decodeUTF16LE(b []byte) string {
 	return sb.String()
 }
 
-
 func isPortReachable(port int) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
 	if err != nil {
@@ -965,10 +964,62 @@ func doCheckQQLoginStatus(cfg *config.Config) (loggedIn bool, nickname string, q
 		return false, "", ""
 	}
 
-	// If unauthorized, clear cached cred and return false (will retry with fresh cred)
+	// If unauthorized, clear cached cred and immediately retry once with a fresh auth.
 	if code, ok := statusResp["code"].(float64); ok && code == -1 {
 		cachedMonitorCred = ""
-		return false, "", ""
+		cachedMonitorCredTime = time.Time{}
+
+		freshToken := ""
+		out, err := dockerOutput("exec", "openclaw-qq", "cat", "/app/napcat/config/webui.json")
+		if err == nil {
+			var webui map[string]interface{}
+			if json.Unmarshal(out, &webui) == nil {
+				if t, ok := webui["token"].(string); ok && t != "" {
+					freshToken = t
+				}
+			}
+		}
+		if freshToken == "" {
+			return false, "", ""
+		}
+		hash := sha256.Sum256([]byte(freshToken + ".napcat"))
+		loginBody := fmt.Sprintf(`{"hash":"%x"}`, hash)
+		respRetry, err := client.Post("http://127.0.0.1:6099/api/auth/login", "application/json", strings.NewReader(loginBody))
+		if err != nil {
+			return false, "", ""
+		}
+		defer respRetry.Body.Close()
+		bodyRetry, _ := io.ReadAll(respRetry.Body)
+		var loginRespRetry map[string]interface{}
+		if json.Unmarshal(bodyRetry, &loginRespRetry) != nil {
+			return false, "", ""
+		}
+		if codeRetry, ok := loginRespRetry["code"].(float64); !ok || codeRetry != 0 {
+			return false, "", ""
+		}
+		dataRetry, _ := loginRespRetry["data"].(map[string]interface{})
+		freshCred, _ := dataRetry["Credential"].(string)
+		if freshCred == "" {
+			return false, "", ""
+		}
+		cachedMonitorCred = freshCred
+		cachedMonitorCredTime = time.Now()
+
+		reqRetry, _ := http.NewRequest("POST", "http://127.0.0.1:6099/api/QQLogin/CheckLoginStatus", nil)
+		reqRetry.Header.Set("Content-Type", "application/json")
+		reqRetry.Header.Set("Authorization", "Bearer "+freshCred)
+		respStatusRetry, err := client.Do(reqRetry)
+		if err != nil {
+			return false, "", ""
+		}
+		defer respStatusRetry.Body.Close()
+		bodyStatusRetry, _ := io.ReadAll(respStatusRetry.Body)
+		if json.Unmarshal(bodyStatusRetry, &statusResp) != nil {
+			return false, "", ""
+		}
+		if codeStatusRetry, ok := statusResp["code"].(float64); !ok || codeStatusRetry != 0 {
+			return false, "", ""
+		}
 	}
 
 	if code, ok := statusResp["code"].(float64); !ok || code != 0 {
