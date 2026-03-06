@@ -24,8 +24,8 @@ const (
 	TokenValidDuration = 5 * time.Minute
 	TokenSecret        = "clawpanel-updater-secret-2026"
 
-	GitHubReleaseAPI  = "https://api.github.com/repos/zhaoxinyi02/ClawPanel/releases/latest"
-	AccelUpdateJSON   = "http://39.102.53.188:16198/clawpanel/update.json"
+	GitHubReleaseAPI   = "https://api.github.com/repos/zhaoxinyi02/ClawPanel/releases/latest"
+	AccelUpdateJSON    = "http://39.102.53.188:16198/clawpanel/update.json"
 	GitHubDownloadBase = "https://github.com/zhaoxinyi02/ClawPanel/releases/download"
 	AccelDownloadBase  = "http://39.102.53.188:16198/clawpanel/releases"
 )
@@ -71,8 +71,8 @@ type Server struct {
 	panelBin       string // path to clawpanel binary
 	panelPort      int
 	mu             sync.Mutex
-	state          UpdateState   // ClawPanel update state
-	ocState        UpdateState   // OpenClaw update state
+	state          UpdateState // ClawPanel update state
+	ocState        UpdateState // OpenClaw update state
 	srv            *http.Server
 	running        bool
 }
@@ -178,6 +178,10 @@ func (s *Server) Start() {
 		cmd.SysProcAttr = sysProcAttr()
 		cmd.Dir = filepath.Dir(bin)
 		if err := cmd.Start(); err != nil {
+			if isLikelySystemdServiceProcess() {
+				log.Printf("[Updater] systemd-run 启动失败: %v，当前运行在 systemd service 中，已拒绝 direct 模式以避免停服后更新器被连带终止", err)
+				return
+			}
 			log.Printf("[Updater] systemd-run 启动失败: %v, 尝试直接启动...", err)
 			s.startDirectChild(bin, logFile)
 			return
@@ -188,6 +192,10 @@ func (s *Server) Start() {
 		select {
 		case err := <-done:
 			// systemd-run exited immediately — inner command failed to launch
+			if isLikelySystemdServiceProcess() {
+				log.Printf("[Updater] systemd-run 立即退出 (err=%v)，当前运行在 systemd service 中，已拒绝 direct 模式以避免停服后更新器被连带终止", err)
+				return
+			}
 			log.Printf("[Updater] systemd-run 立即退出 (err=%v), 尝试直接启动...", err)
 			s.startDirectChild(bin, logFile)
 			return
@@ -202,6 +210,22 @@ func (s *Server) Start() {
 
 	s.running = true
 	log.Printf("[Updater] 独立更新子进程已启动 (systemd-run scope) → http://0.0.0.0:%d/updater", UpdaterPort)
+}
+
+func isLikelySystemdServiceProcess() bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if os.Getenv("INVOCATION_ID") != "" {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		text := string(data)
+		if strings.Contains(text, ".service") || strings.Contains(text, "system.slice") {
+			return true
+		}
+	}
+	return false
 }
 
 // startDirectChild starts the updater as a direct detached child (fallback for non-systemd or Windows)
@@ -1362,7 +1386,7 @@ func (s *Server) downloadFile(url, dest, source string) error {
 			}
 			downloaded += int64(n)
 			if totalSize > 0 {
-				pct := int(float64(downloaded) / float64(totalSize) * 35) + 25 // 25-60%
+				pct := int(float64(downloaded)/float64(totalSize)*35) + 25 // 25-60%
 				s.setProgress(pct)
 				s.setStep(3, "running", fmt.Sprintf("下载中 %.1f MB / %.1f MB (%d%%)",
 					float64(downloaded)/1048576, float64(totalSize)/1048576,
@@ -1385,12 +1409,12 @@ func (s *Server) recordUpdateLog() {
 	s.mu.Unlock()
 
 	logEntry := map[string]interface{}{
-		"time":       time.Now().Format(time.RFC3339),
-		"from":       state.FromVer,
-		"to":         state.ToVer,
-		"source":     state.Source,
-		"result":     state.Phase,
-		"started_at": state.StartedAt,
+		"time":        time.Now().Format(time.RFC3339),
+		"from":        state.FromVer,
+		"to":          state.ToVer,
+		"source":      state.Source,
+		"result":      state.Phase,
+		"started_at":  state.StartedAt,
 		"finished_at": state.FinishedAt,
 	}
 
