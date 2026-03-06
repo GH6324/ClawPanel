@@ -425,6 +425,7 @@ func (m *Manager) ensureOpenClawConfig() {
 	qqInstalled := false
 	if _, err := os.Stat(qqExtDir); err == nil {
 		qqInstalled = true
+		m.normalizeQQPluginOwnership(qqExtDir)
 	}
 	napcatRunning := m.isNapCatRunning()
 
@@ -520,6 +521,22 @@ func (m *Manager) ensureOpenClawConfig() {
 
 	// Patch QQ plugin channel.ts: startAccount must return a long-lived Promise
 	m.patchQQPluginChannelTS(ocDir)
+}
+
+// normalizeQQPluginOwnership ensures QQ extension ownership matches the running
+// service user (root in launchd/systemd deployments). Otherwise OpenClaw may
+// block the plugin as suspicious ownership and refuse to load channel "qq".
+func (m *Manager) normalizeQQPluginOwnership(qqExtDir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if os.Geteuid() != 0 {
+		return
+	}
+	cmd := exec.Command("chown", "-R", "0:0", qqExtDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[ProcessMgr] 修复 QQ 插件目录属主失败: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
 }
 
 // patchQQPluginChannelTS fixes the critical bug where the QQ plugin's startAccount
