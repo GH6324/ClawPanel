@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -178,6 +179,10 @@ func (s *Server) Start() {
 		cmd.SysProcAttr = sysProcAttr()
 		cmd.Dir = filepath.Dir(bin)
 		if err := cmd.Start(); err != nil {
+			if isLikelySystemdServiceProcess() {
+				log.Printf("[Updater] systemd-run 启动失败: %v，当前运行在 systemd service 中，已拒绝 direct 模式以避免停服后更新器被连带终止", err)
+				return
+			}
 			log.Printf("[Updater] systemd-run 启动失败: %v, 尝试直接启动...", err)
 			s.startDirectChild(bin, logFile)
 			return
@@ -188,6 +193,10 @@ func (s *Server) Start() {
 		select {
 		case err := <-done:
 			// systemd-run exited immediately — inner command failed to launch
+			if isLikelySystemdServiceProcess() {
+				log.Printf("[Updater] systemd-run 立即退出 (err=%v)，当前运行在 systemd service 中，已拒绝 direct 模式以避免停服后更新器被连带终止", err)
+				return
+			}
 			log.Printf("[Updater] systemd-run 立即退出 (err=%v), 尝试直接启动...", err)
 			s.startDirectChild(bin, logFile)
 			return
@@ -202,6 +211,22 @@ func (s *Server) Start() {
 
 	s.running = true
 	log.Printf("[Updater] 独立更新子进程已启动 (systemd-run scope) → http://0.0.0.0:%d/updater", UpdaterPort)
+}
+
+func isLikelySystemdServiceProcess() bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if os.Getenv("INVOCATION_ID") != "" {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		text := string(data)
+		if strings.Contains(text, ".service") || strings.Contains(text, "system.slice") {
+			return true
+		}
+	}
+	return false
 }
 
 // startDirectChild starts the updater as a direct detached child (fallback for non-systemd or Windows)
@@ -1208,16 +1233,27 @@ func (s *Server) stopPanel() error {
 		}
 		time.Sleep(1 * time.Second)
 	} else {
-		// Only use systemctl stop — do NOT pkill, as that would kill the updater child process
-		exec.Command("systemctl", "stop", "clawpanel").Run()
-		time.Sleep(3 * time.Second)
-		// If systemd service is still active, wait a bit more
-		for i := 0; i < 5; i++ {
-			out, _ := exec.Command("systemctl", "is-active", "clawpanel").Output()
-			if strings.TrimSpace(string(out)) != "active" {
-				break
+		if runtime.GOOS == "darwin" {
+			_ = exec.Command("launchctl", "stop", "com.clawpanel.service").Run()
+			_ = exec.Command("launchctl", "bootout", "system", "/Library/LaunchDaemons/com.clawpanel.service.plist").Run()
+			time.Sleep(2 * time.Second)
+		} else {
+			if commandExists("systemctl") {
+				exec.Command("systemctl", "stop", "clawpanel").Run()
+				time.Sleep(3 * time.Second)
+				// If systemd service is still active, wait a bit more
+				for i := 0; i < 5; i++ {
+					out, _ := exec.Command("systemctl", "is-active", "clawpanel").Output()
+					if strings.TrimSpace(string(out)) != "active" {
+						break
+					}
+					time.Sleep(1 * time.Second)
+				}
+			} else {
+				// Non-systemd Linux fallback: kill panel process but keep updater child alive
+				_ = killPanelProcessesExceptUpdater(os.Getpid(), os.Getppid())
+				time.Sleep(1 * time.Second)
 			}
-			time.Sleep(1 * time.Second)
 		}
 	}
 	return nil
@@ -1235,6 +1271,17 @@ func (s *Server) startPanel() error {
 		return nil
 	}
 	err := exec.Command("systemctl", "start", "clawpanel").Run()
+	if runtime.GOOS == "darwin" {
+		if err := exec.Command("launchctl", "kickstart", "-k", "system/com.clawpanel.service").Run(); err == nil {
+			return nil
+		}
+		_ = exec.Command("launchctl", "load", "-w", "/Library/LaunchDaemons/com.clawpanel.service.plist").Run()
+		if err := exec.Command("launchctl", "kickstart", "-k", "system/com.clawpanel.service").Run(); err == nil {
+			return nil
+		}
+		cmd := exec.Command("bash", "-c", fmt.Sprintf("nohup %s >/dev/null 2>&1 &", s.panelBin))
+		return cmd.Run()
+	}
 	if err != nil {
 		// Try direct start
 		cmd := exec.Command("bash", "-c", fmt.Sprintf("nohup %s >/dev/null 2>&1 &", s.panelBin))
@@ -1248,9 +1295,52 @@ func (s *Server) isPanelRunning() bool {
 		out, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq clawpanel.exe", "/NH").Output()
 		return strings.Contains(string(out), "clawpanel")
 	}
-	// Use systemctl is-active instead of pgrep (pgrep would match the updater child too)
-	out, _ := exec.Command("systemctl", "is-active", "clawpanel").Output()
-	return strings.TrimSpace(string(out)) == "active"
+	if runtime.GOOS == "darwin" {
+		return isPortOpen(s.panelPort)
+	}
+	if commandExists("systemctl") {
+		// Use systemctl is-active instead of pgrep (pgrep would match updater child too)
+		out, _ := exec.Command("systemctl", "is-active", "clawpanel").Output()
+		return strings.TrimSpace(string(out)) == "active"
+	}
+	return isPortOpen(s.panelPort)
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func isPortOpen(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func killPanelProcessesExceptUpdater(selfPID, parentPID int) error {
+	out, err := exec.Command("pgrep", "-f", "clawpanel").Output()
+	if err != nil {
+		return nil
+	}
+	for _, pidStr := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		if pid == selfPID || pid == parentPID {
+			continue
+		}
+		cmdlineRaw, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		cmdline := strings.ReplaceAll(string(cmdlineRaw), "\x00", " ")
+		if strings.Contains(cmdline, "--updater-standalone") {
+			continue
+		}
+		_ = exec.Command("kill", "-TERM", strconv.Itoa(pid)).Run()
+	}
+	return nil
 }
 
 func (s *Server) fetchLatestVersion() (*VersionInfo, string, error) {

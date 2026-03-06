@@ -274,13 +274,15 @@ func CheckUpdate(cfg *config.Config) gin.HandlerFunc {
 }
 
 func resolveOpenClawCurrentVersion(cfg *config.Config) string {
-	if v := normalizeVersion(detectOpenClawVersion(cfg)); v != "" {
-		return v
-	}
+	// Prefer live CLI version first: this reflects what users see in terminal
+	// and avoids stale values from historical config/app paths.
 	if out := runCmd("openclaw", "--version"); out != "" {
 		if v := normalizeVersion(out); v != "" {
 			return v
 		}
+	}
+	if v := normalizeVersion(detectOpenClawVersion(cfg)); v != "" {
+		return v
 	}
 	ocConfig, _ := cfg.ReadOpenClawJSON()
 	if ocConfig != nil {
