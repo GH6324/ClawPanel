@@ -15,10 +15,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
+	"github.com/zhaoxinyi02/ClawPanel/internal/eventlog"
 	"github.com/zhaoxinyi02/ClawPanel/internal/handler"
 	"github.com/zhaoxinyi02/ClawPanel/internal/middleware"
 	"github.com/zhaoxinyi02/ClawPanel/internal/model"
-	"github.com/zhaoxinyi02/ClawPanel/internal/eventlog"
 	"github.com/zhaoxinyi02/ClawPanel/internal/monitor"
 	"github.com/zhaoxinyi02/ClawPanel/internal/plugin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/process"
@@ -41,10 +41,10 @@ func main() {
 	// 独立更新子进程模式：仅运行更新服务HTTP服务器
 	// 由主进程 fork 出来，主进程被 systemctl stop 杀死后子进程继续存活
 	if len(os.Args) >= 6 && os.Args[1] == "--updater-standalone" {
-		version := os.Args[2]      // e.g. "5.0.11"
-		dataDir := os.Args[3]      // e.g. "/home/xxx/ClawPanel/data"
-		panelPort := os.Args[4]    // e.g. "19527"
-		openClawDir := os.Args[5]  // e.g. "/home/xxx/openclaw/config"
+		version := os.Args[2]     // e.g. "5.0.11"
+		dataDir := os.Args[3]     // e.g. "/home/xxx/ClawPanel/data"
+		panelPort := os.Args[4]   // e.g. "19527"
+		openClawDir := os.Args[5] // e.g. "/home/xxx/openclaw/config"
 		port := 0
 		fmt.Sscanf(panelPort, "%d", &port)
 		if port == 0 {
@@ -162,7 +162,6 @@ func runServer(stopCh chan struct{}) {
 	// 启动独立更新服务（进程隔离，独立端口）
 	updaterSrv := updater.NewServer(Version, cfg.DataDir, cfg.OpenClawDir, cfg.Port)
 	updaterSrv.Start()
-	defer updaterSrv.Stop()
 
 	// 设置 Gin 模式
 	if cfg.Debug {
