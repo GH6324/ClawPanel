@@ -9,6 +9,81 @@ type ChannelDef = {
   loginMethods?: ('qrcode' | 'quick' | 'password')[];
 };
 
+function isPlainObject(value: any): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function getNestedValue(raw: any, path: string): any {
+  return path.split('.').reduce<any>((acc, key) => (isPlainObject(acc) ? acc[key] : undefined), raw);
+}
+
+function setNestedValue(raw: Record<string, any>, path: string, value: any) {
+  const keys = path.split('.');
+  let cur: Record<string, any> = raw;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    if (!isPlainObject(cur[key])) cur[key] = {};
+    cur = cur[key];
+  }
+  cur[keys[keys.length - 1]] = value;
+}
+
+function deleteNestedValue(raw: Record<string, any>, path: string) {
+  const keys = path.split('.');
+  let cur: Record<string, any> | undefined = raw;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    if (!isPlainObject(cur?.[key])) return;
+    cur = cur[key];
+  }
+  if (!cur) return;
+  delete cur[keys[keys.length - 1]];
+}
+
+function listFeishuAccountIDs(cfg: any): string[] {
+  const accounts = isPlainObject(cfg?.accounts) ? cfg.accounts : {};
+  return Object.keys(accounts).map(id => id.trim()).filter(Boolean).sort((a, b) => {
+    if (a === 'default') return -1;
+    if (b === 'default') return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function pickFeishuDefaultAccount(cfg: any): string {
+  const explicit = String(cfg?.defaultAccount || '').trim();
+  if (explicit) return explicit;
+  const ids = listFeishuAccountIDs(cfg);
+  if (ids.includes('default')) return 'default';
+  return ids[0] || 'default';
+}
+
+function hasFeishuAdvancedAccounts(cfg: any): boolean {
+  return listFeishuAccountIDs(cfg).length > 0;
+}
+
+function resolveFeishuSimpleCredentials(cfg: any): { appId: string; appSecret: string } {
+  const appId = String(cfg?.appId || '').trim();
+  const appSecret = String(cfg?.appSecret || '').trim();
+  if (appId || appSecret) return { appId, appSecret };
+  const defaultAccount = pickFeishuDefaultAccount(cfg);
+  const entry = isPlainObject(cfg?.accounts?.[defaultAccount]) ? cfg.accounts[defaultAccount] : {};
+  return {
+    appId: String(entry.appId || '').trim(),
+    appSecret: String(entry.appSecret || '').trim(),
+  };
+}
+
+function formatCommaList(value: any): string {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean).join(', ');
+  }
+  return String(value || '').trim();
+}
+
 const CHANNEL_DEFS: ChannelDef[] = [
   { id: 'qq', label: 'QQ (NapCat)', description: 'QQ个人号，NapCat OneBot11协议', type: 'plugin',
     loginMethods: ['qrcode', 'quick', 'password'],
@@ -75,10 +150,15 @@ const CHANNEL_DEFS: ChannelDef[] = [
   // Plugin channels
   { id: 'feishu', label: '飞书 / Lark', description: '飞书机器人 WebSocket (插件)', type: 'plugin',
     configFields: [
-      { key: 'appId', label: 'App ID', type: 'text' },
-      { key: 'appSecret', label: 'App Secret', type: 'password' },
+      { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu' },
+      { key: 'requireMention', label: '群聊回复策略', type: 'select', options: ['true', 'false', 'open'], help: 'true = 仅 @ 机器人；false = 放宽触发；open = 以插件支持的开放模式处理' },
+      { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊' },
+      { key: 'groupAllowFrom', label: '群聊白名单', type: 'text', placeholder: 'oc_xxx,oc_yyy', help: '多个群 ID 请用英文逗号分隔；仅 groupPolicy=allowlist 时生效，保存时会自动转成数组' },
+      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单' },
       { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '仅飞书官方版支持，开启后回复以流式卡片形式呈现' },
       { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '仅飞书官方版支持，每个话题拥有独立会话并可并行' },
+      { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略' },
+      { key: 'footer.status', label: '显示状态页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略' },
       { key: 'replyInThread', label: '话题内回复', type: 'toggle', help: '仅 ClawTeam 版支持，优先在话题内回复' },
       { key: 'typingIndicator', label: '输入中提示', type: 'toggle', help: '仅 ClawTeam 版支持' },
       { key: 'resolveSenderNames', label: '解析发送者名称', type: 'toggle', help: '仅 ClawTeam 版支持，自动解析飞书用户显示名' },
@@ -154,9 +234,15 @@ function getChannelStatus(ch: ChannelDef, ocConfig: any): 'enabled' | 'configure
     : (chConf.enabled || pluginConf.enabled);
   // Check if any config field has a value
   const hasConfig = ch.configFields.some(f => {
-    const v = chConf[f.key];
+    const v = getNestedValue(chConf, f.key);
     return v !== undefined && v !== null && v !== '';
-  });
+  }) || (
+    ch.id === 'feishu' && (
+      !!String(chConf?.appId || '').trim()
+      || !!String(chConf?.appSecret || '').trim()
+      || hasFeishuAdvancedAccounts(chConf)
+    )
+  );
   if (isEnabled) return 'enabled';
   if (hasConfig) return 'configured';
   return 'unconfigured';
@@ -205,7 +291,35 @@ export default function Channels() {
   const [diagnoseResult, setDiagnoseResult] = useState<any>(null);
   const [restarting, setRestarting] = useState(false);
   const [installedPlugins, setInstalledPlugins] = useState<any[]>([]);
+  const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
+  const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
+  const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
   const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const syncFeishuUiState = useCallback((config: any) => {
+    const feishuCfg = isPlainObject(config?.channels?.feishu) ? config.channels.feishu : {};
+    const hasAccounts = hasFeishuAdvancedAccounts(feishuCfg);
+    const defaultAccount = pickFeishuDefaultAccount(feishuCfg);
+    const accountIDs = listFeishuAccountIDs(feishuCfg);
+    setFeishuAdvancedAccounts(hasAccounts);
+    setFeishuActiveAccountId(accountIDs.includes(defaultAccount) ? defaultAccount : (defaultAccount || accountIDs[0] || 'default'));
+    setFeishuNewAccountId('');
+  }, []);
+
+  const updateChannelDraft = useCallback((channelId: string, mutate: (draft: any) => void) => {
+    setOcConfig((prev: any) => {
+      const next = deepClone(prev || {});
+      if (!isPlainObject(next.channels)) next.channels = {};
+      const current = isPlainObject(next.channels[channelId]) ? deepClone(next.channels[channelId]) : {};
+      mutate(current);
+      next.channels[channelId] = current;
+      return next;
+    });
+  }, []);
+
+  const updateFeishuDraft = useCallback((mutate: (draft: any) => void) => {
+    updateChannelDraft('feishu', mutate);
+  }, [updateChannelDraft]);
 
   const loadNapcatStatus = () => {
     api.napcatStatus().then(r => { if (r.ok) setNapcatStatus(r.status); }).catch(() => {});
@@ -260,7 +374,12 @@ export default function Channels() {
 
   const reload = () => {
     api.getStatus().then(r => { if (r.ok) setStatus(r); });
-    api.getOpenClawConfig().then(r => { if (r.ok) setOcConfig(r.config || {}); });
+    api.getOpenClawConfig().then(r => {
+      if (!r.ok) return;
+      const nextConfig = r.config || {};
+      setOcConfig(nextConfig);
+      syncFeishuUiState(nextConfig);
+    });
     api.getRequests().then(r => { if (r.ok) setRequests(r.requests || []); });
   };
 
@@ -280,12 +399,134 @@ export default function Channels() {
     else setSelectedChannel('feishu');
   }, [ocConfig, selectedChannel]);
   useEffect(() => {
+    if (selectedChannel === 'feishu') syncFeishuUiState(ocConfig);
+  }, [selectedChannel, syncFeishuUiState]);
+  useEffect(() => {
     const timer = setInterval(loadNapcatStatus, 30000);
     return () => clearInterval(timer);
   }, []);
 
   const ocChannels = ocConfig?.channels || {};
   const ocPlugins = ocConfig?.plugins?.entries || {};
+  const currentFeishuConfig = isPlainObject(ocChannels.feishu) ? ocChannels.feishu : {};
+  const currentFeishuVariant = getActiveFeishuVariant(ocConfig);
+  const currentFeishuAccounts = listFeishuAccountIDs(currentFeishuConfig);
+  const currentFeishuDefaultAccount = pickFeishuDefaultAccount(currentFeishuConfig);
+  const currentFeishuSimpleCredentials = resolveFeishuSimpleCredentials(currentFeishuConfig);
+  const currentFeishuAccountConfig = isPlainObject(currentFeishuConfig.accounts?.[feishuActiveAccountId])
+    ? currentFeishuConfig.accounts[feishuActiveAccountId]
+    : {};
+  const currentFeishuGroupPolicy = String(currentFeishuConfig.groupPolicy || '').trim();
+  const currentFeishuGroupAllowFrom = formatCommaList(currentFeishuConfig.groupAllowFrom);
+  const hasFeishuGroupAllowlistConflict = currentFeishuGroupPolicy !== '' && currentFeishuGroupPolicy !== 'allowlist' && !!currentFeishuGroupAllowFrom;
+
+  const toggleDraftField = (channelId: string, key: string) => {
+    updateChannelDraft(channelId, draft => {
+      setNestedValue(draft, key, !getNestedValue(draft, key));
+    });
+  };
+
+  const handleToggleFeishuAdvancedAccounts = (enabled: boolean) => {
+    setFeishuAdvancedAccounts(enabled);
+    if (!enabled) return;
+    const seededAccount = currentFeishuDefaultAccount || 'default';
+    updateFeishuDraft(draft => {
+      if (!isPlainObject(draft.accounts)) draft.accounts = {};
+      if (!isPlainObject(draft.accounts[seededAccount])) draft.accounts[seededAccount] = {};
+      if (draft.appId && !draft.accounts[seededAccount].appId) draft.accounts[seededAccount].appId = draft.appId;
+      if (draft.appSecret && !draft.accounts[seededAccount].appSecret) draft.accounts[seededAccount].appSecret = draft.appSecret;
+      draft.defaultAccount = seededAccount;
+    });
+    setFeishuActiveAccountId(seededAccount);
+  };
+
+  const handleFeishuSimpleFieldChange = (key: 'appId' | 'appSecret', value: string) => {
+    updateFeishuDraft(draft => {
+      if (value) draft[key] = value;
+      else delete draft[key];
+      const defaultAccount = pickFeishuDefaultAccount(draft);
+      if (!defaultAccount || !hasFeishuAdvancedAccounts(draft)) return;
+      if (!isPlainObject(draft.accounts)) draft.accounts = {};
+      if (!isPlainObject(draft.accounts[defaultAccount])) draft.accounts[defaultAccount] = {};
+      if (value) draft.accounts[defaultAccount][key] = value;
+      else delete draft.accounts[defaultAccount][key];
+    });
+  };
+
+  const handleFeishuDefaultAccountChange = (accountId: string) => {
+    updateFeishuDraft(draft => {
+      if (accountId) draft.defaultAccount = accountId;
+      else delete draft.defaultAccount;
+      const entry = isPlainObject(draft.accounts?.[accountId]) ? draft.accounts[accountId] : {};
+      if (entry.appId) draft.appId = entry.appId;
+      else delete draft.appId;
+      if (entry.appSecret) draft.appSecret = entry.appSecret;
+      else delete draft.appSecret;
+    });
+    setFeishuActiveAccountId(accountId);
+  };
+
+  const handleFeishuAccountFieldChange = (accountId: string, key: 'appId' | 'appSecret', value: string) => {
+    updateFeishuDraft(draft => {
+      if (!isPlainObject(draft.accounts)) draft.accounts = {};
+      if (!isPlainObject(draft.accounts[accountId])) draft.accounts[accountId] = {};
+      if (value) draft.accounts[accountId][key] = value;
+      else delete draft.accounts[accountId][key];
+      if (pickFeishuDefaultAccount(draft) === accountId) {
+        if (value) draft[key] = value;
+        else delete draft[key];
+      }
+    });
+  };
+
+  const handleAddFeishuAccount = () => {
+    const nextID = feishuNewAccountId.trim();
+    if (!nextID) {
+      setMsg('请先输入 Account ID');
+      setTimeout(() => setMsg(''), 3000);
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(nextID)) {
+      setMsg('Account ID 仅支持字母、数字、点、下划线和中划线');
+      setTimeout(() => setMsg(''), 4000);
+      return;
+    }
+    if (currentFeishuAccounts.includes(nextID)) {
+      setMsg(`Account ID 已存在：${nextID}`);
+      setTimeout(() => setMsg(''), 3000);
+      return;
+    }
+    updateFeishuDraft(draft => {
+      if (!isPlainObject(draft.accounts)) draft.accounts = {};
+      draft.accounts[nextID] = {};
+      if (!String(draft.defaultAccount || '').trim()) draft.defaultAccount = nextID;
+    });
+    setFeishuAdvancedAccounts(true);
+    setFeishuActiveAccountId(nextID);
+    setFeishuNewAccountId('');
+  };
+
+  const handleRemoveFeishuAccount = (accountId: string) => {
+    if (currentFeishuAccounts.length <= 1) {
+      setMsg('至少保留一个 Account；如果只需要单机器人，请关闭完整版 Account 功能。');
+      setTimeout(() => setMsg(''), 4000);
+      return;
+    }
+    const remaining = currentFeishuAccounts.filter(id => id !== accountId);
+    const nextDefault = currentFeishuDefaultAccount === accountId ? remaining[0] : currentFeishuDefaultAccount;
+    updateFeishuDraft(draft => {
+      if (!isPlainObject(draft.accounts)) return;
+      delete draft.accounts[accountId];
+      if (nextDefault) draft.defaultAccount = nextDefault;
+      else delete draft.defaultAccount;
+      const entry = isPlainObject(draft.accounts?.[draft.defaultAccount]) ? draft.accounts[draft.defaultAccount] : {};
+      if (entry.appId) draft.appId = entry.appId;
+      else delete draft.appId;
+      if (entry.appSecret) draft.appSecret = entry.appSecret;
+      else delete draft.appSecret;
+    });
+    if (feishuActiveAccountId === accountId) setFeishuActiveAccountId(nextDefault || remaining[0] || 'default');
+  };
 
   // Get the merged config for the current channel (supports nested keys like notifications.antiRecall)
   const getFieldValue = (channelId: string, key: string) => {
@@ -307,6 +548,9 @@ export default function Channels() {
         const legacy = chConf?.wakeTrigger;
         if (typeof legacy === 'string') return legacy;
       }
+    }
+    if (channelId === 'feishu' && key === 'groupAllowFrom') {
+      return formatCommaList(chConf?.groupAllowFrom);
     }
     return key.split('.').reduce((o: any, k: string) => o?.[k], chConf);
   };
@@ -345,28 +589,26 @@ export default function Channels() {
       const formEl = document.getElementById('channel-config-form') as HTMLFormElement;
       if (!formEl) return;
       const formData = new FormData(formEl);
-      const chData: any = JSON.parse(JSON.stringify(ocChannels[currentDef.id] || {}));
+      const chData: any = deepClone(ocChannels[currentDef.id] || {});
       for (const f of currentDef.configFields) {
         if (f.type === 'toggle') continue; // toggles handled separately via handleToggleField
         const val = formData.get(f.key);
-        if (val !== null && val !== '') {
-          let parsed: any = f.type === 'number' ? Number(val) : val;
-          if (currentDef.id === 'qq' && f.key === 'rateLimit.wakeTrigger.keywords') {
-            parsed = String(val)
-              .split(',')
-              .map(v => v.trim())
-              .filter(Boolean);
-          }
-          // Support nested keys like welcome.template
-          const keys = f.key.split('.');
-          if (keys.length === 1) {
-            chData[f.key] = parsed;
-          } else {
-            let cur = chData;
-            for (let i = 0; i < keys.length - 1; i++) { if (!cur[keys[i]]) cur[keys[i]] = {}; cur = cur[keys[i]]; }
-            cur[keys[keys.length - 1]] = parsed;
-          }
+        if (val === null) continue;
+        if (val === '') {
+          deleteNestedValue(chData, f.key);
+          continue;
         }
+        let parsed: any = f.type === 'number' ? Number(val) : val;
+        if (currentDef.id === 'qq' && f.key === 'rateLimit.wakeTrigger.keywords') {
+          parsed = String(val)
+            .split(',')
+            .map(v => v.trim())
+            .filter(Boolean);
+        }
+        setNestedValue(chData, f.key, parsed);
+      }
+      if (currentDef.id === 'feishu' && String(chData.groupPolicy || '').trim() !== 'allowlist') {
+        delete chData.groupAllowFrom;
       }
       await api.updateChannel(currentDef.id, chData);
       // 飞书特殊处理：保存时操作当前活跃变体的 plugin entry
@@ -970,10 +1212,190 @@ export default function Channels() {
                 </div>
               )}
 
+              {currentDef.id === 'feishu' && (
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold text-gray-900 dark:text-white">Account 兼容模式</div>
+                      <p className="text-xs text-gray-500 leading-relaxed">
+                        默认使用简版单账号语法；开启「完整版 Account」后，会额外维护
+                        <span className="mx-1 font-mono">channels.feishu.accounts/defaultAccount</span>
+                        ，并与 Agent 路由里的 <span className="font-mono">accountId</span> 对齐。
+                      </p>
+                      <p className="text-xs text-gray-500 leading-relaxed">
+                        当前配置仍共享 <span className="font-mono">channels.feishu</span>；默认账号的凭证会同步镜像到顶层
+                        <span className="mx-1 font-mono">appId/appSecret</span>
+                        ，兼容简版与完整版两种写法。
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
+                      <span className={`text-xs ${feishuAdvancedAccounts ? 'text-violet-600 dark:text-violet-400 font-medium' : 'text-gray-500'}`}>
+                        {feishuAdvancedAccounts ? '已开启完整版 Account' : '当前为简版单账号'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFeishuAdvancedAccounts(!feishuAdvancedAccounts)}
+                        className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${feishuAdvancedAccounts ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${feishuAdvancedAccounts ? 'translate-x-4' : ''}`} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {!feishuAdvancedAccounts && hasFeishuAdvancedAccounts(currentFeishuConfig) && (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/70 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300">
+                      当前配置已存在多账号结构；关闭完整版 Account 仅隐藏编辑区，不会删除已有账号。简版输入会继续编辑默认账号
+                      {currentFeishuDefaultAccount ? `（${currentFeishuDefaultAccount}）` : ''} 的凭证镜像。
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">基础凭证</h4>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {currentFeishuVariant === 'official'
+                          ? '官方版早期仍在快速迭代，面板优先展示确认过的共享字段。'
+                          : currentFeishuVariant === 'clawteam'
+                            ? 'ClawTeam 版字段更明确；这里仍统一写入 channels.feishu 共享配置。'
+                            : '未检测到活动变体时，也会先写入共享的 channels.feishu 配置。'}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">App ID</label>
+                        <input
+                          value={feishuAdvancedAccounts ? String(currentFeishuAccountConfig.appId || '') : currentFeishuSimpleCredentials.appId}
+                          onChange={e => {
+                            const value = e.target.value;
+                            if (feishuAdvancedAccounts) handleFeishuAccountFieldChange(feishuActiveAccountId || currentFeishuDefaultAccount, 'appId', value);
+                            else handleFeishuSimpleFieldChange('appId', value);
+                          }}
+                          placeholder="cli_xxx"
+                          className="w-full px-3.5 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">App Secret</label>
+                        <input
+                          type="password"
+                          value={feishuAdvancedAccounts ? String(currentFeishuAccountConfig.appSecret || '') : currentFeishuSimpleCredentials.appSecret}
+                          onChange={e => {
+                            const value = e.target.value;
+                            if (feishuAdvancedAccounts) handleFeishuAccountFieldChange(feishuActiveAccountId || currentFeishuDefaultAccount, 'appSecret', value);
+                            else handleFeishuSimpleFieldChange('appSecret', value);
+                          }}
+                          placeholder="请输入 App Secret"
+                          className="w-full px-3.5 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        />
+                      </div>
+                    </div>
+                    {!feishuAdvancedAccounts && (
+                      <p className="text-[11px] text-gray-500 leading-relaxed">
+                        简版模式下只需维护顶层 <span className="font-mono">appId/appSecret</span>；如要给不同飞书机器人分配不同 Agent，再开启完整版 Account。
+                      </p>
+                    )}
+                  </div>
+
+                  {feishuAdvancedAccounts && (
+                    <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">完整版 Account 管理</h4>
+                          <p className="text-xs text-gray-500 mt-1">
+                            默认账号会被 Agent 路由里的空 <span className="font-mono">accountId</span> 命中；写入后会同步镜像到顶层凭证。
+                          </p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            value={feishuNewAccountId}
+                            onChange={e => setFeishuNewAccountId(e.target.value)}
+                            placeholder="新 Account ID，例如 backup"
+                            className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddFeishuAccount}
+                            className="px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+                          >
+                            添加 Account
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] gap-4">
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">默认账号</label>
+                            <select
+                              value={currentFeishuDefaultAccount}
+                              onChange={e => handleFeishuDefaultAccountChange(e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                            >
+                              {currentFeishuAccounts.map(accountId => (
+                                <option key={accountId} value={accountId}>{accountId}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-2">
+                            {currentFeishuAccounts.map(accountId => (
+                              <button
+                                key={accountId}
+                                type="button"
+                                onClick={() => setFeishuActiveAccountId(accountId)}
+                                className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg border text-left text-sm transition-colors ${
+                                  feishuActiveAccountId === accountId
+                                    ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300'
+                                    : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 hover:border-violet-300'
+                                }`}
+                              >
+                                <span className="truncate">{accountId}</span>
+                                {accountId === currentFeishuDefaultAccount && (
+                                  <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300">默认</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-gray-100 dark:border-gray-700 p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-gray-900 dark:text-white">当前编辑：{feishuActiveAccountId}</div>
+                              <p className="text-xs text-gray-500 mt-1">如果它被设为默认账号，顶层 appId/appSecret 会自动同步为这个账号的值。</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFeishuAccount(feishuActiveAccountId)}
+                              className="px-3 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-900/20"
+                            >
+                              删除当前账号
+                            </button>
+                          </div>
+                          <div className="text-[11px] text-gray-500">
+                            Agent 页面里的路由会自动读取这里的 <span className="font-mono">accounts/defaultAccount</span>，从而为 <span className="font-mono">accountId</span> 提供下拉选择。
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {currentDef.id === 'feishu' && hasFeishuGroupAllowlistConflict && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/70 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                  当前 <span className="font-mono">groupPolicy</span> 为 <span className="font-mono">{currentFeishuGroupPolicy}</span>，
+                  <span className="mx-1 font-mono">groupAllowFrom</span>
+                  仅在 <span className="font-mono">allowlist</span> 模式下生效。若保持当前策略并保存，白名单会被自动清理。
+                </div>
+              )}
+
               <form id="channel-config-form" className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5" onSubmit={e => { e.preventDefault(); handleSave(); }}>
                 {currentDef.configFields.map(field => {
-                  const currentVal = getFieldValue(currentDef.id, field.key);
-                  const isFullWidth = field.type === 'toggle' || field.key === 'webhookUrl' || field.key === 'token' || field.key === 'accessToken' || field.key === 'appSecret';
+                  const rawCurrentVal = getFieldValue(currentDef.id, field.key);
+                  const currentVal = currentDef.id === 'feishu' && field.key === 'requireMention'
+                    ? (rawCurrentVal === true ? 'true' : rawCurrentVal === false ? 'false' : (rawCurrentVal ?? ''))
+                    : rawCurrentVal;
+                  const isFullWidth = field.type === 'toggle' || field.key === 'webhookUrl' || field.key === 'token' || field.key === 'accessToken' || field.key === 'appSecret' || field.key === 'groupAllowFrom';
                   
                   return (
                     <div key={field.key} className={isFullWidth ? "md:col-span-2" : ""}>
@@ -987,13 +1409,29 @@ export default function Channels() {
                       {field.type === 'toggle' ? (
                         <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
                           <button type="button"
-                            onClick={() => handleToggleField(currentDef.id, field.key)}
+                            onClick={() => currentDef.id === 'feishu' ? toggleDraftField(currentDef.id, field.key) : handleToggleField(currentDef.id, field.key)}
                             className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${currentVal ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
                             <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${currentVal ? 'translate-x-4' : ''}`} />
                           </button>
                           <span className={`text-xs ${currentVal ? 'text-violet-600 dark:text-violet-400 font-medium' : 'text-gray-500'}`}>
                             {currentVal ? t.channels.opened : t.channels.closed}
                           </span>
+                        </div>
+                      ) : field.type === 'select' ? (
+                        <div className="relative">
+                          <select
+                            name={field.key}
+                            defaultValue={currentVal ?? ''}
+                            className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none
+                              ${(currentVal !== undefined && currentVal !== null && currentVal !== '')
+                                ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100'
+                                : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
+                          >
+                            <option value="">未配置</option>
+                            {field.options?.map(opt => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
                         </div>
                       ) : (
                         <div className="relative">

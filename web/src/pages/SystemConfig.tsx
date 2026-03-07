@@ -781,12 +781,38 @@ export default function SystemConfig() {
             </div>
             
             <div className="space-y-6">
-              <CfgSection title="Agent 默认设置" icon={Brain} fields={[
-                { path: 'agents.defaults.contextTokens', label: '上下文Token数', type: 'number' as const, placeholder: '200000' },
-                { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4' },
-                { path: 'agents.defaults.compaction.mode', label: '压缩模式', type: 'select' as const, options: ['default', 'safeguard'] },
-                { path: 'agents.defaults.compaction.maxHistoryShare', label: '历史占比上限', type: 'number' as const, placeholder: '0.5' },
-              ]} getVal={getVal} setVal={setVal} />
+              <CfgSection
+                title="Agent 默认设置"
+                icon={Brain}
+                description="这里控制所有未单独覆盖的 Agent 默认上下文预算；单个 Agent 可在 Agent 管理页继续覆盖 contextTokens / compaction。"
+                defaultExpanded
+                fields={[
+                  {
+                    path: 'agents.defaults.contextTokens',
+                    label: '默认上下文 Token 预算',
+                    type: 'number' as const,
+                    placeholder: '200000',
+                    help: 'OpenClaw 会再与模型真实 contextWindow 取更小值；留空表示不在面板里显式覆盖。',
+                  },
+                  { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4' },
+                  {
+                    path: 'agents.defaults.compaction.mode',
+                    label: '压缩模式',
+                    type: 'select' as const,
+                    options: ['default', 'safeguard'],
+                    help: 'default 为常规裁剪；safeguard 会更保守地压缩工具结果。',
+                  },
+                  {
+                    path: 'agents.defaults.compaction.maxHistoryShare',
+                    label: '历史占比上限',
+                    type: 'number' as const,
+                    placeholder: '0.5',
+                    help: '控制历史消息最多可占上下文预算的比例。',
+                  },
+                ]}
+                getVal={getVal}
+                setVal={setVal}
+              />
             </div>
           </div>
 
@@ -1683,12 +1709,12 @@ function ProviderHealthCheck({ pid, prov }: { pid: string; prov: any }) {
   );
 }
 
-function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
-  title: string; icon: any;
-  fields: { path: string; label: string; type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select'; options?: string[]; placeholder?: string }[];
+function CfgSection({ title, icon: Icon, description, defaultExpanded = false, fields, getVal, setVal }: {
+  title: string; icon: any; description?: string; defaultExpanded?: boolean;
+  fields: { path: string; label: string; type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select'; options?: string[]; placeholder?: string; help?: string }[];
   getVal: (p: string) => any; setVal: (p: string, v: any) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
       <button onClick={() => setExpanded(!expanded)}
@@ -1698,7 +1724,14 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
         </div>
         <div className="flex-1">
           <span className="text-sm font-bold text-gray-900 dark:text-white block">{title}</span>
-          <span className="text-[10px] text-gray-400 mt-0.5">{fields.length} 个配置项</span>
+          {description ? (
+            <>
+              <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">{description}</span>
+              <span className="text-[10px] text-gray-400 mt-1 block">{fields.length} 个配置项</span>
+            </>
+          ) : (
+            <span className="text-[10px] text-gray-400 mt-0.5">{fields.length} 个配置项</span>
+          )}
         </div>
         {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
       </button>
@@ -1735,10 +1768,17 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
                   </select>
                   <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
+              ) : field.type === 'number' ? (
+                <CfgNumberInput
+                  value={getVal(field.path)}
+                  placeholder={field.placeholder}
+                  onCommit={next => setVal(field.path, next)}
+                />
               ) : (
                 <div className="relative group">
-                  <input type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
-                    value={getVal(field.path) ?? ''} onChange={e => setVal(field.path, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                  <input type={field.type === 'password' ? 'password' : 'text'}
+                    value={getVal(field.path) ?? ''}
+                    onChange={e => setVal(field.path, e.target.value)}
                     placeholder={field.placeholder}
                     className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all placeholder:text-gray-400" />
                   {field.type === 'password' && (
@@ -1748,11 +1788,61 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
                   )}
                 </div>
               )}
+              {field.help && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{field.help}</p>
+              )}
             </div>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function CfgNumberInput({ value, placeholder, onCommit }: { value: any; placeholder?: string; onCommit: (next: number | undefined) => void }) {
+  const [draft, setDraft] = useState(value === undefined || value === null ? '' : String(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(value === undefined || value === null ? '' : String(value));
+  }, [focused, value]);
+
+  const commit = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      onCommit(undefined);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) onCommit(parsed);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        commit(draft);
+      }}
+      onChange={e => {
+        const raw = e.target.value;
+        if (!/^-?(?:\d+)?(?:\.\d*)?$/.test(raw)) return;
+        setDraft(raw);
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          onCommit(undefined);
+          return;
+        }
+        if (trimmed !== '-' && trimmed !== '.' && trimmed !== '-.' && !trimmed.endsWith('.')) {
+          commit(trimmed);
+        }
+      }}
+      placeholder={placeholder}
+      className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all placeholder:text-gray-400"
+    />
   );
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -222,6 +223,9 @@ func SaveChannel(cfg *config.Config) gin.HandlerFunc {
 		if id == "qq" {
 			body = normalizeQQChannelConfig(body)
 		}
+		if id == "feishu" {
+			body = normalizeFeishuChannelConfig(body)
+		}
 		channels[id] = body
 		ocConfig["channels"] = channels
 
@@ -280,6 +284,157 @@ func normalizeQQChannelConfig(body map[string]interface{}) map[string]interface{
 	if enabled, ok := body["autoApproveGroup"].(bool); ok {
 		groupApprove["enabled"] = enabled
 		delete(body, "autoApproveGroup")
+	}
+
+	return body
+}
+
+func normalizeFeishuChannelConfig(body map[string]interface{}) map[string]interface{} {
+	if body == nil {
+		return map[string]interface{}{}
+	}
+
+	if raw, exists := body["requireMention"]; exists {
+		switch v := raw.(type) {
+		case string:
+			switch trimmed := strings.TrimSpace(v); trimmed {
+			case "":
+				delete(body, "requireMention")
+			case "true":
+				body["requireMention"] = true
+			case "false":
+				body["requireMention"] = false
+			default:
+				body["requireMention"] = trimmed
+			}
+		}
+	}
+
+	if raw, exists := body["groupAllowFrom"]; exists {
+		switch v := raw.(type) {
+		case string:
+			parts := strings.FieldsFunc(v, func(r rune) bool {
+				return r == ',' || r == '，'
+			})
+			items := make([]interface{}, 0, len(parts))
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					items = append(items, trimmed)
+				}
+			}
+			if len(items) > 0 {
+				body["groupAllowFrom"] = items
+			} else {
+				delete(body, "groupAllowFrom")
+			}
+		case []interface{}:
+			items := make([]interface{}, 0, len(v))
+			for _, item := range v {
+				trimmed := strings.TrimSpace(toString(item))
+				if trimmed != "" {
+					items = append(items, trimmed)
+				}
+			}
+			if len(items) > 0 {
+				body["groupAllowFrom"] = items
+			} else {
+				delete(body, "groupAllowFrom")
+			}
+		}
+	}
+
+	groupPolicy := strings.TrimSpace(toString(body["groupPolicy"]))
+	if groupPolicy != "" {
+		body["groupPolicy"] = groupPolicy
+	} else {
+		delete(body, "groupPolicy")
+	}
+	if groupPolicy != "allowlist" {
+		delete(body, "groupAllowFrom")
+	}
+
+	dmPolicy := strings.TrimSpace(toString(body["dmPolicy"]))
+	if dmPolicy != "" {
+		body["dmPolicy"] = dmPolicy
+	} else {
+		delete(body, "dmPolicy")
+	}
+
+	topAppID := strings.TrimSpace(toString(body["appId"]))
+	if topAppID != "" {
+		body["appId"] = topAppID
+	} else {
+		delete(body, "appId")
+	}
+	topAppSecret := strings.TrimSpace(toString(body["appSecret"]))
+	if topAppSecret != "" {
+		body["appSecret"] = topAppSecret
+	} else {
+		delete(body, "appSecret")
+	}
+
+	defaultAccount := strings.TrimSpace(toString(body["defaultAccount"]))
+	rawAccounts, _ := body["accounts"].(map[string]interface{})
+	normalizedAccounts := map[string]interface{}{}
+	accountIDs := make([]string, 0, len(rawAccounts))
+	for rawID, rawEntry := range rawAccounts {
+		accountID := strings.TrimSpace(rawID)
+		if accountID == "" {
+			continue
+		}
+		entry, _ := rawEntry.(map[string]interface{})
+		if entry == nil {
+			entry = map[string]interface{}{}
+		}
+		nextEntry := map[string]interface{}{}
+		if appID := strings.TrimSpace(toString(entry["appId"])); appID != "" {
+			nextEntry["appId"] = appID
+		}
+		if appSecret := strings.TrimSpace(toString(entry["appSecret"])); appSecret != "" {
+			nextEntry["appSecret"] = appSecret
+		}
+		if len(nextEntry) > 0 || accountID == defaultAccount {
+			normalizedAccounts[accountID] = nextEntry
+			accountIDs = append(accountIDs, accountID)
+		}
+	}
+	sort.Strings(accountIDs)
+	if defaultAccount == "" {
+		if _, ok := normalizedAccounts["default"]; ok {
+			defaultAccount = "default"
+		} else if len(accountIDs) > 0 {
+			defaultAccount = accountIDs[0]
+		}
+	}
+	if defaultAccount != "" {
+		entry, _ := normalizedAccounts[defaultAccount].(map[string]interface{})
+		if entry == nil {
+			entry = map[string]interface{}{}
+		}
+		if _, ok := entry["appId"]; !ok && topAppID != "" {
+			entry["appId"] = topAppID
+		}
+		if _, ok := entry["appSecret"]; !ok && topAppSecret != "" {
+			entry["appSecret"] = topAppSecret
+		}
+		if len(entry) > 0 {
+			normalizedAccounts[defaultAccount] = entry
+		}
+		if appID := strings.TrimSpace(toString(entry["appId"])); appID != "" {
+			body["appId"] = appID
+		}
+		if appSecret := strings.TrimSpace(toString(entry["appSecret"])); appSecret != "" {
+			body["appSecret"] = appSecret
+		}
+		body["defaultAccount"] = defaultAccount
+	} else {
+		delete(body, "defaultAccount")
+	}
+	if len(normalizedAccounts) > 0 {
+		body["accounts"] = normalizedAccounts
+	} else {
+		delete(body, "accounts")
 	}
 
 	return body

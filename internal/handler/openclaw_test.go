@@ -130,3 +130,94 @@ func TestPatchModelsJSONForAgentUsesConfiguredAgentDir(t *testing.T) {
 		t.Fatalf("expected compat.supportsDeveloperRole to be forced false")
 	}
 }
+
+func TestNormalizeFeishuChannelConfigMirrorsDefaultAccountToTopLevel(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"defaultAccount": "main",
+		"accounts": map[string]interface{}{
+			"main": map[string]interface{}{
+				"appId":     "cli_main",
+				"appSecret": "secret_main",
+			},
+			"backup": map[string]interface{}{
+				"appId": "cli_backup",
+			},
+		},
+	}
+
+	got := normalizeFeishuChannelConfig(input)
+
+	if got["appId"] != "cli_main" {
+		t.Fatalf("expected top-level appId mirrored from default account, got %#v", got["appId"])
+	}
+	if got["appSecret"] != "secret_main" {
+		t.Fatalf("expected top-level appSecret mirrored from default account, got %#v", got["appSecret"])
+	}
+}
+
+func TestNormalizeFeishuChannelConfigSeedsDefaultAccountFromTopLevel(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"appId":          "cli_simple",
+		"appSecret":      "secret_simple",
+		"defaultAccount": "default",
+	}
+
+	got := normalizeFeishuChannelConfig(input)
+
+	accounts, _ := got["accounts"].(map[string]interface{})
+	entry, _ := accounts["default"].(map[string]interface{})
+	if entry == nil {
+		t.Fatalf("expected default account entry to be created, got %#v", got["accounts"])
+	}
+	if entry["appId"] != "cli_simple" {
+		t.Fatalf("expected default account appId to inherit top-level value, got %#v", entry["appId"])
+	}
+	if entry["appSecret"] != "secret_simple" {
+		t.Fatalf("expected default account appSecret to inherit top-level value, got %#v", entry["appSecret"])
+	}
+}
+
+func TestNormalizeFeishuChannelConfigParsesMentionAndAllowList(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"requireMention": "false",
+		"groupPolicy":    "allowlist",
+		"groupAllowFrom": "oc_123， oc_456 , ",
+	}
+
+	got := normalizeFeishuChannelConfig(input)
+
+	if got["requireMention"] != false {
+		t.Fatalf("expected requireMention to normalize to bool false, got %#v", got["requireMention"])
+	}
+	groupAllowFrom, _ := got["groupAllowFrom"].([]interface{})
+	if len(groupAllowFrom) != 2 {
+		t.Fatalf("expected two allowlist entries, got %#v", got["groupAllowFrom"])
+	}
+	if groupAllowFrom[0] != "oc_123" || groupAllowFrom[1] != "oc_456" {
+		t.Fatalf("unexpected normalized allowlist: %#v", groupAllowFrom)
+	}
+}
+
+func TestNormalizeFeishuChannelConfigDropsAllowlistOutsideAllowlistPolicy(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"groupPolicy":    "open",
+		"groupAllowFrom": "oc_123, oc_456",
+	}
+
+	got := normalizeFeishuChannelConfig(input)
+
+	if got["groupPolicy"] != "open" {
+		t.Fatalf("expected groupPolicy to stay open, got %#v", got["groupPolicy"])
+	}
+	if _, exists := got["groupAllowFrom"]; exists {
+		t.Fatalf("expected groupAllowFrom to be removed when policy is not allowlist, got %#v", got["groupAllowFrom"])
+	}
+}
