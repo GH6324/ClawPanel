@@ -37,6 +37,17 @@ type ConfigTab = 'models' | 'identity' | 'general' | 'version' | 'env' | 'health
 type ConfigDiffItem = { path: string; before: string; after: string };
 type BrowserControlPreset = 'disabled' | 'managed' | 'custom';
 type BrowserProfileMode = 'openclaw' | 'chrome' | 'custom';
+type CfgField = {
+  path: string;
+  label: string;
+  type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select';
+  options?: string[];
+  placeholder?: string;
+  help?: string;
+  min?: number;
+  max?: number;
+  integer?: boolean;
+};
 
 function cloneConfig<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? {}));
@@ -75,6 +86,20 @@ function buildConfigDiff(before: any, after: any, prefix = ''): ConfigDiffItem[]
     result = result.concat(buildConfigDiff(before?.[k], after?.[k], nextPath));
   });
   return result;
+}
+
+function readConfigValue(raw: any, path: string): any {
+  return path.split('.').reduce((acc: any, key: string) => (acc && typeof acc === 'object' && !Array.isArray(acc) ? acc[key] : undefined), raw);
+}
+
+function validateNumericFieldValue(raw: any, field: Pick<CfgField, 'label' | 'min' | 'max' | 'integer'>): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : Number.NaN;
+  if (!Number.isFinite(value)) return `${field.label} 必须是数字`;
+  if (field.integer && !Number.isInteger(value)) return `${field.label} 必须是整数`;
+  if (field.min !== undefined && value < field.min) return `${field.label} 不能小于 ${field.min}`;
+  if (field.max !== undefined && value > field.max) return `${field.label} 不能大于 ${field.max}`;
+  return null;
 }
 
 function getBrowserConfigDraft(config: any): Record<string, any> {
@@ -334,6 +359,19 @@ export default function SystemConfig() {
         if (trimmed) browser.defaultProfile = trimmed;
         else delete browser.defaultProfile;
       }
+    }
+
+    const numericFields: CfgField[] = [
+      { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.contextTokens', label: '默认上下文 Token 预算', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.compaction.maxHistoryShare', label: '历史占比上限', type: 'number', min: 0, max: 1 },
+      { path: 'gateway.port', label: '端口', type: 'number', integer: true, min: 1, max: 65535 },
+      { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number', integer: true, min: 1 },
+    ];
+    for (const field of numericFields) {
+      const error = validateNumericFieldValue(readConfigValue(clone, field.path), field);
+      if (error) throw new Error(error);
     }
 
     return clone;
@@ -820,7 +858,7 @@ export default function SystemConfig() {
               
               <CfgSection title="消息配置" icon={MessageSquare} fields={[
                 { path: 'messages.responsePrefix', label: '回复前缀', type: 'text' as const, placeholder: '[OpenClaw]' },
-                { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000' },
+                { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
                 { path: 'messages.ackReactionScope', label: '确认反应范围', type: 'select' as const, options: ['all', 'group-mentions', 'group-all', 'direct', 'off', 'none'] },
               ]} getVal={getVal} setVal={setVal} />
             </div>
@@ -838,8 +876,10 @@ export default function SystemConfig() {
                     type: 'number' as const,
                     placeholder: '200000',
                     help: 'OpenClaw 会再与模型真实 contextWindow 取更小值；留空表示不在面板里显式覆盖。',
+                    integer: true,
+                    min: 1,
                   },
-                  { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4' },
+                  { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
                   {
                     path: 'agents.defaults.compaction.mode',
                     label: '压缩模式',
@@ -853,6 +893,8 @@ export default function SystemConfig() {
                     type: 'number' as const,
                     placeholder: '0.5',
                     help: '控制历史消息最多可占上下文预算的比例。',
+                    min: 0,
+                    max: 1,
                   },
                 ]}
                 getVal={getVal}
@@ -936,7 +978,7 @@ export default function SystemConfig() {
       {tab === 'general' && (
         <div className="space-y-3">
           <CfgSection title="网关配置" icon={Globe} fields={[
-            { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789' },
+            { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789', integer: true, min: 1, max: 65535 },
             { path: 'gateway.mode', label: '模式', type: 'select' as const, options: ['local', 'remote'] },
             { path: 'gateway.bind', label: '绑定', type: 'select' as const, options: ['auto', 'loopback', 'lan', 'tailnet', 'custom'] },
             { path: 'gateway.customBindHost', label: '自定义绑定地址', type: 'text' as const, placeholder: '0.0.0.0 / 127.0.0.1 / ::1' },
@@ -945,7 +987,7 @@ export default function SystemConfig() {
           ]} getVal={getVal} setVal={setVal} />
           <CfgSection title="多智能体协同" icon={Users} fields={[
             { path: 'tools.agentToAgent.enabled', label: '启用 Agent 间委托', type: 'toggle' as const },
-            { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4' },
+            { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
             { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['same-agent', 'all-agents'] },
           ]} getVal={getVal} setVal={setVal} />
           <BrowserControlSection config={config} updateConfig={updateConfig} />
@@ -1757,7 +1799,7 @@ function ProviderHealthCheck({ pid, prov }: { pid: string; prov: any }) {
 
 function CfgSection({ title, icon: Icon, description, defaultExpanded = false, fields, getVal, setVal }: {
   title: string; icon: any; description?: string; defaultExpanded?: boolean;
-  fields: { path: string; label: string; type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select'; options?: string[]; placeholder?: string; help?: string }[];
+  fields: CfgField[];
   getVal: (p: string) => any; setVal: (p: string, v: any) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -1818,6 +1860,10 @@ function CfgSection({ title, icon: Icon, description, defaultExpanded = false, f
                 <CfgNumberInput
                   value={getVal(field.path)}
                   placeholder={field.placeholder}
+                  label={field.label}
+                  integer={field.integer}
+                  min={field.min}
+                  max={field.max}
                   onCommit={next => setVal(field.path, next)}
                 />
               ) : (
@@ -2090,7 +2136,23 @@ function BrowserControlSection({
   );
 }
 
-function CfgNumberInput({ value, placeholder, onCommit }: { value: any; placeholder?: string; onCommit: (next: number | undefined) => void }) {
+function CfgNumberInput({
+  value,
+  placeholder,
+  label,
+  integer,
+  min,
+  max,
+  onCommit,
+}: {
+  value: any;
+  placeholder?: string;
+  label: string;
+  integer?: boolean;
+  min?: number;
+  max?: number;
+  onCommit: (next: number | undefined) => void;
+}) {
   const [draft, setDraft] = useState(value === undefined || value === null ? '' : String(value));
   const [focused, setFocused] = useState(false);
 
@@ -2105,7 +2167,8 @@ function CfgNumberInput({ value, placeholder, onCommit }: { value: any; placehol
       return;
     }
     const parsed = Number(trimmed);
-    if (Number.isFinite(parsed)) onCommit(parsed);
+    const error = validateNumericFieldValue(parsed, { label, integer, min, max });
+    if (Number.isFinite(parsed) && !error) onCommit(parsed);
   };
 
   return (

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -70,6 +71,68 @@ func TestSaveOpenClawConfigPreservesCriticalFields(t *testing.T) {
 	}
 	if _, ok := cron["jobs"]; !ok {
 		t.Fatalf("cron.jobs should be preserved")
+	}
+}
+
+func TestSaveOpenClawConfigRejectsInvalidNumericFields(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name   string
+		config map[string]interface{}
+		want   string
+	}{
+		{
+			name: "invalid context tokens",
+			config: map[string]interface{}{
+				"agents": map[string]interface{}{
+					"defaults": map[string]interface{}{
+						"contextTokens": 0,
+					},
+				},
+			},
+			want: "agents.defaults.contextTokens",
+		},
+		{
+			name: "invalid history share",
+			config: map[string]interface{}{
+				"agents": map[string]interface{}{
+					"defaults": map[string]interface{}{
+						"compaction": map[string]interface{}{
+							"maxHistoryShare": 1.2,
+						},
+					},
+				},
+			},
+			want: "agents.defaults.compaction.maxHistoryShare",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			cfg := &config.Config{OpenClawDir: dir}
+
+			r := gin.New()
+			r.PUT("/openclaw/config", SaveOpenClawConfig(cfg))
+
+			body, _ := json.Marshal(map[string]interface{}{"config": tc.config})
+			req := httptest.NewRequest(http.MethodPut, "/openclaw/config", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("expected error to mention %q, got %s", tc.want, w.Body.String())
+			}
+		})
 	}
 }
 

@@ -117,6 +117,7 @@ interface AgentModelResponse {
 type AgentsWorkbenchView = 'directory' | 'routing';
 type AgentDetailTab = 'overview' | 'model' | 'tools' | 'files' | 'capabilities' | 'context' | 'advanced';
 type PreviewMetaKey = 'channel' | 'sender' | 'peer' | 'parentPeer' | 'guildId' | 'teamId' | 'accountId' | 'roles';
+type NumberInputConstraint = { integer?: boolean; min?: number; max?: number };
 
 interface AgentCoreFileEntry {
   name: string;
@@ -277,8 +278,8 @@ const PREVIEW_FIELD_META: Record<PreviewMetaKey, { label: string; placeholder: s
   },
   accountId: {
     label: '账号',
-    placeholder: '留空=默认账号，*=全部账号',
-    help: '想验证默认账号规则时可以留空；需要测试兜底规则时再写 *。',
+    placeholder: '留空=按默认账号预览，*=全部账号',
+    help: '留空时，面板会在已知 channel 下自动代入 defaultAccount；需要测试兜底规则时再写 *。',
   },
   sender: {
     label: '发送者',
@@ -802,6 +803,28 @@ function parseChannelsMeta(raw: any): Record<string, ChannelMeta> {
   return out;
 }
 
+function buildPreviewMetaPayload(previewMeta: Record<PreviewMetaKey, string>, channelMeta: Record<string, ChannelMeta>): Record<string, any> {
+  const meta: Record<string, any> = {};
+  for (const [key, raw] of Object.entries(previewMeta) as Array<[PreviewMetaKey, string]>) {
+    const text = raw.trim();
+    if (!text) continue;
+    if (key === 'roles') {
+      const roles = parseCSV(text);
+      if (roles.length > 0) meta[key] = roles;
+      continue;
+    }
+    meta[key] = text;
+  }
+
+  const channel = typeof meta.channel === 'string' ? meta.channel.trim() : '';
+  if (channel && meta.accountId === undefined) {
+    const defaultAccount = String(channelMeta[channel]?.defaultAccount || '').trim();
+    if (defaultAccount) meta.accountId = defaultAccount;
+  }
+
+  return meta;
+}
+
 function stringifyJSON(raw: any): string {
   return raw === undefined ? '' : JSON.stringify(raw, null, 2);
 }
@@ -873,11 +896,14 @@ function parseStringList(raw: any): string[] {
   return [];
 }
 
-function parseNumberInput(raw: string, label: string): number | undefined {
+function parseNumberInput(raw: string, label: string, constraint?: NumberInputConstraint): number | undefined {
   const text = raw.trim();
   if (!text) return undefined;
   const value = Number(text);
   if (!Number.isFinite(value)) throw new Error(`${label} 必须是数字`);
+  if (constraint?.integer && !Number.isInteger(value)) throw new Error(`${label} 必须是整数`);
+  if (constraint?.min !== undefined && value < constraint.min) throw new Error(`${label} 不能小于 ${constraint.min}`);
+  if (constraint?.max !== undefined && value > constraint.max) throw new Error(`${label} 不能大于 ${constraint.max}`);
   return value;
 }
 
@@ -1722,8 +1748,8 @@ export default function Agents() {
         paramsObj = cleanupObject(nextParams);
       }
 
-      parsedContextTokens = parseNumberInput(form.contextTokens, 'contextTokens');
-      parsedCompactionMaxHistoryShare = parseNumberInput(form.compactionMaxHistoryShare, 'compaction.maxHistoryShare');
+      parsedContextTokens = parseNumberInput(form.contextTokens, 'contextTokens', { integer: true, min: 1 });
+      parsedCompactionMaxHistoryShare = parseNumberInput(form.compactionMaxHistoryShare, 'compaction.maxHistoryShare', { min: 0, max: 1 });
 
       if (structuredTouched.identity) {
         if (identityObj !== undefined && !isPlainObject(identityObj)) {
@@ -2136,16 +2162,7 @@ export default function Agents() {
   };
 
   const runPreview = async () => {
-    const meta: Record<string, any> = {};
-    Object.entries(previewMeta).forEach(([k, v]) => {
-      if (!v.trim()) return;
-      if (k === 'roles') {
-        const roles = parseCSV(v);
-        if (roles.length > 0) meta[k] = roles;
-        return;
-      }
-      meta[k] = v.trim();
-    });
+    const meta = buildPreviewMetaPayload(previewMeta, channelMeta);
 
     setPreviewLoading(true);
     try {
@@ -3058,9 +3075,9 @@ export default function Agents() {
               </div>
             </div>
             <div className="px-4 pt-4">
-              <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs text-violet-700 dark:border-violet-900/40 dark:bg-violet-950/20 dark:text-violet-200">
-                命中顺序按列表从上到下执行；如果没有任何规则命中，消息会自动回落到默认 Agent「{defaultAgent}」。
-              </div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs text-violet-700 dark:border-violet-900/40 dark:bg-violet-950/20 dark:text-violet-200">
+                  固定优先级为 sender &gt; peer &gt; parentPeer &gt; guildId+roles &gt; guildId &gt; teamId &gt; accountId &gt; accountId:* &gt; channel；只有同优先级规则才按列表从上到下比较。未命中时会回落到默认 Agent「{defaultAgent}」。
+                </div>
             </div>
             <div className="p-4 space-y-3">
               {bindings.length === 0 && (

@@ -105,6 +105,10 @@ func SaveOpenClawConfig(cfg *config.Config) gin.HandlerFunc {
 		normalizeOpenClawModelAPIs(ocCfg)
 		syncAllowedModels(ocCfg)
 		preserveHiddenOpenClawFields(ocCfg, existingCfg)
+		if err := validateOpenClawNumericConfig(ocCfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
 
 		if err := cfg.WriteOpenClawJSON(ocCfg); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
