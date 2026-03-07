@@ -63,6 +63,8 @@ const _api = {
   createAgent: (agent: any) => post('/openclaw/agents', { agent }),
   updateAgent: (id: string, agent: any) => put(`/openclaw/agents/${id}`, { agent }),
   deleteAgent: (id: string, preserveSessions = true) => del(`/openclaw/agents/${id}?preserveSessions=${preserveSessions ? 'true' : 'false'}`),
+  getAgentCoreFiles: (id: string) => get(`/openclaw/agents/${id}/core-files`),
+  saveAgentCoreFile: (id: string, name: string, content: string) => put(`/openclaw/agents/${id}/core-files`, { name, content }),
   getBindings: () => get('/openclaw/bindings'),
   updateBindings: (bindings: any[]) => put('/openclaw/bindings', { bindings }),
   previewRoute: (meta: any) => post('/openclaw/route/preview', { meta }),
