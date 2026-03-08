@@ -1,20 +1,20 @@
 {
-  "latest_version": "5.2.4",
-  "release_time": "2026-03-08T21:03:00+08:00",
-  "release_note": "## v5.2.4 - OpenClaw 桌面端安装前置依赖收口\n\n### 安装体验\n- Windows / macOS 安装 OpenClaw 前会先检查 Node.js >= 20 与 Git\n- 缺少依赖时不再尝试自动安装，直接返回清晰错误，避免一键安装半途失败\n- 前端阻断提示新增 Node.js 与 Git 官网跳转按钮，用户可先完成基础依赖安装后再继续\n\n### 背景\n- 桌面端环境里自动安装 Node.js / Git 容易受 winget、PATH、权限和终端环境影响，报错率较高\n- 本版本改为先手动安装基础依赖，再继续一键安装 OpenClaw，整体成功率和可解释性更好",
+  "latest_version": "5.2.5",
+  "release_time": "2026-03-08T22:19:00+08:00",
+  "release_note": "## v5.2.5 - Windows 环境检测与前置依赖可用性增强\n\n### Windows 环境检测\n- 扩展 Windows 常见运行时路径探测，补充 Node.js、npm、Git、Python、Chocolatey、Scoop、pyenv-win、ClawPanel npm-global 等目录\n- Python 检测从仅识别 python3 改为依次尝试：python3、python、py\n- 解决先安装面板、后手动安装 Node.js/Git/Python，面板里仍显示未安装的高频误判问题\n\n### OpenClaw 安装前校验\n- Windows / macOS 安装 OpenClaw 前，除了检查 node 与 git，还会同步确认 npm 可用\n- 避免出现检测到 Node.js，但 npm 实际不可用，安装仍然半途失败的情况",
   "download_urls": {
-    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.4-linux-amd64",
-    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.4-linux-arm64",
-    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.4-darwin-amd64",
-    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.4-darwin-arm64",
-    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.4-windows-amd64.exe"
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-linux-amd64",
+    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-linux-arm64",
+    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-darwin-amd64",
+    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-darwin-arm64",
+    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-windows-amd64.exe"
   },
   "sha256": {
-    "linux_amd64": "790b7b23a64131bbb4762bc412df78e7c8ab4ca3442762c639efb0b82c4dccf9",
-    "linux_arm64": "0acc181d0f91e8b65adfc31957d1dcdd6895cc120a0485e537708258312a631a",
-    "darwin_amd64": "75b2f3f63a376ab75b8fe3f4997a94e9a4eeb1ec3fdfc3142c8fb66d9147168f",
-    "darwin_arm64": "7746024108c4f14ec5a7e9156af00f4cbefd633855c6e48444e94b1a8e28513d",
-    "windows_amd64": "96db608a138e08e1f96d8f924a27688d5d48b04d6e39f5f9aa7dbcf4d91f6c5f"
+    "linux_amd64": "159cfd730fd4e058550b79aa528bfdb643cb673518ccfeaf1294fc70785e8c77",
+    "linux_arm64": "c879afda9dd0a52ae3c2b7642d117b38724fca602605b9d5cf85b20844380033",
+    "darwin_amd64": "a81df79fcc7ec7b9f1745b4d6f7f9c8d80216c70605e213b9318dca9f3b6baaf",
+    "darwin_arm64": "e797e8d0ba13640aa0e74e3bb4e4eb06ca940ea185b590aafbd84d028707d9b9",
+    "windows_amd64": "0d767625e48a433f94ee17d584ba9139e6ee67284ae40d6886b714e755b31987"
   },
   "major_change": false,
   "change_warning": ""
