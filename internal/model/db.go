@@ -54,6 +54,67 @@ func migrate(db *sql.DB) error {
 		value TEXT NOT NULL,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS workflow_templates (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		category TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'ready',
+		trigger_mode TEXT NOT NULL DEFAULT 'manual',
+		settings_json TEXT NOT NULL DEFAULT '{}',
+		definition_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_workflow_templates_status ON workflow_templates(status);
+
+	CREATE TABLE IF NOT EXISTS workflow_runs (
+		id TEXT PRIMARY KEY,
+		short_id TEXT NOT NULL,
+		template_id TEXT NOT NULL DEFAULT '',
+		name TEXT NOT NULL,
+		status TEXT NOT NULL,
+		channel_id TEXT NOT NULL DEFAULT '',
+		conversation_id TEXT NOT NULL DEFAULT '',
+		user_id TEXT NOT NULL DEFAULT '',
+		source_message TEXT NOT NULL DEFAULT '',
+		settings_json TEXT NOT NULL DEFAULT '{}',
+		context_json TEXT NOT NULL DEFAULT '{}',
+		last_message TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+	CREATE INDEX IF NOT EXISTS idx_workflow_runs_conversation ON workflow_runs(channel_id, conversation_id, user_id, updated_at DESC);
+
+	CREATE TABLE IF NOT EXISTS workflow_steps (
+		id TEXT PRIMARY KEY,
+		run_id TEXT NOT NULL,
+		step_key TEXT NOT NULL,
+		title TEXT NOT NULL,
+		step_type TEXT NOT NULL,
+		status TEXT NOT NULL,
+		order_index INTEGER NOT NULL,
+		needs_approval INTEGER NOT NULL DEFAULT 0,
+		input_json TEXT NOT NULL DEFAULT '{}',
+		output_text TEXT NOT NULL DEFAULT '',
+		error_text TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_workflow_steps_run ON workflow_steps(run_id, order_index ASC);
+
+	CREATE TABLE IF NOT EXISTS workflow_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		run_id TEXT NOT NULL,
+		step_id TEXT NOT NULL DEFAULT '',
+		event_type TEXT NOT NULL,
+		message TEXT NOT NULL,
+		payload_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_workflow_events_run ON workflow_events(run_id, created_at ASC);
 	`
 	_, err := db.Exec(schema)
 	return err
@@ -61,12 +122,12 @@ func migrate(db *sql.DB) error {
 
 // Event 事件日志
 type Event struct {
-	ID        int64  `json:"id"`
-	Time      int64  `json:"time"`
-	Source    string `json:"source"`
-	Type     string `json:"type"`
-	Summary  string `json:"summary"`
-	Detail   string `json:"detail"`
+	ID      int64  `json:"id"`
+	Time    int64  `json:"time"`
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Summary string `json:"summary"`
+	Detail  string `json:"detail"`
 }
 
 // AddEvent 添加事件

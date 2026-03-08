@@ -94,7 +94,7 @@ func TestRemoveOpenClawPluginStateDeletesEntriesAndInstalls(t *testing.T) {
 	if err := m.syncOpenClawPluginState("wecom", dir+"/extensions/wecom", true, "registry", "latest"); err != nil {
 		t.Fatalf("seed syncOpenClawPluginState: %v", err)
 	}
-	if err := m.removeOpenClawPluginState("wecom"); err != nil {
+	if err := m.removeOpenClawPluginState("wecom", true); err != nil {
 		t.Fatalf("removeOpenClawPluginState: %v", err)
 	}
 	saved, err := cfg.ReadOpenClawJSON()

@@ -988,6 +988,7 @@ export default function SystemConfig() {
             { path: 'tools.agentToAgent.enabled', label: '启用 Agent 间委托', type: 'toggle' as const },
             { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
             { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['same-agent', 'all-agents'] },
+            { path: 'session.dmScope', label: '私聊隔离范围', type: 'select' as const, options: ['main', 'per-peer', 'per-channel-peer', 'per-account-channel-peer'] },
           ]} getVal={getVal} setVal={setVal} />
           <SessionIsolationSection config={config} updateConfig={updateConfig} />
           <BrowserControlSection config={config} updateConfig={updateConfig} />

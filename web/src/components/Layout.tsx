@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ScrollText, Radio, Sparkles, Clock, Settings,
   Moon, Sun, LogOut, Menu, FolderOpen, Languages, MessageSquare,
-  RotateCw, RefreshCw, Power, Puzzle, Bot, Search, Bell, ChevronDown,
+  RotateCw, RefreshCw, Power, Puzzle, Bot, Search, Bell, ChevronDown, GitBranch,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import AIAssistant from './AIAssistant';
@@ -11,6 +11,43 @@ import MessageCenter, { TaskInfo } from './MessageCenter';
 import { api } from '../lib/api';
 
 interface Props { onLogout: () => void; napcatStatus: any; wechatStatus?: any; openclawStatus?: any; processStatus?: any; wsMessages?: any[]; }
+
+function mapWorkflowRunToTask(run: any): TaskInfo {
+  let status: TaskInfo['status'] = 'pending';
+  if (run?.status === 'completed') status = 'success';
+  else if (run?.status === 'failed') status = 'failed';
+  else if (run?.status === 'cancelled') status = 'canceled';
+  else if (run?.status === 'running' || run?.status === 'paused' || run?.status === 'waiting_for_user' || run?.status === 'waiting_for_approval') status = 'running';
+
+  const steps = Array.isArray(run?.steps) ? run.steps : [];
+  const finished = steps.filter((step: any) => step?.status === 'completed' || step?.status === 'skipped').length;
+  const progress = run?.status === 'completed' ? 100 : steps.length > 0 ? Math.round((finished / steps.length) * 100) : 0;
+
+  return {
+    id: `workflow-${run.id}`,
+    name: `${run.name || '工作流'} ${run.shortId || ''}`.trim(),
+    type: 'workflow_run',
+    status,
+    progress,
+    error: run?.status === 'failed' ? run?.lastMessage : undefined,
+    createdAt: new Date(run?.createdAt || Date.now()).toISOString(),
+    updatedAt: new Date(run?.updatedAt || Date.now()).toISOString(),
+    logCount: run?.lastMessage ? 1 : 0,
+    log: run?.lastMessage ? [run.lastMessage] : [],
+  };
+}
+
+function mergeTasks(base: TaskInfo[], extra: TaskInfo[]) {
+  const merged = new Map<string, TaskInfo>();
+  [...extra, ...base].forEach(task => {
+    merged.set(task.id, task);
+  });
+  return Array.from(merged.values()).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function filterVisibleTasks(tasks: TaskInfo[]) {
+  return tasks.filter(task => !(task.type === 'workflow_run' && task.status === 'canceled'));
+}
 
 export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawStatus, processStatus, wsMessages }: Props) {
   const { t, locale, setLocale } = useI18n();
@@ -26,7 +63,15 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
   const profileRef = useRef<HTMLDivElement | null>(null);
 
   const loadTasks = useCallback(async () => {
-    try { const r = await api.getTasks(); if (r.ok) setTasks(r.tasks || []); } catch {}
+    try {
+      const [taskRes, workflowRes] = await Promise.all([
+        api.getTasks(),
+        api.getWorkflowRuns(),
+      ]);
+      const taskItems = taskRes?.ok ? (taskRes.tasks || []) : [];
+      const workflowItems = workflowRes?.ok ? (workflowRes.runs || []).map(mapWorkflowRunToTask) : [];
+      setTasks(filterVisibleTasks(mergeTasks(taskItems, workflowItems)));
+    } catch {}
   }, []);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
@@ -37,6 +82,9 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     const last = wsMessages[wsMessages.length - 1];
     if (last?.type === 'task_update') {
       setTasks(prev => {
+        if (last.task?.type === 'workflow_run' && last.task?.status === 'canceled') {
+          return prev.filter(t => t.id !== last.task.id);
+        }
         const idx = prev.findIndex(t => t.id === last.task.id);
         if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], ...last.task }; return n; }
         return [last.task, ...prev];
@@ -56,6 +104,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     { to: '/skills', icon: Sparkles, label: t.nav.skills },
     { to: '/plugins', icon: Puzzle, label: locale === 'zh-CN' ? '插件中心' : 'Plugins' },
     ...(enableAgents ? [{ to: '/agents', icon: Bot, label: locale === 'zh-CN' ? '智能体' : 'Agents' }] : []),
+    { to: '/workflows', icon: GitBranch, label: locale === 'zh-CN' ? '工作流' : 'Workflows' },
     { to: '/cron', icon: Clock, label: t.nav.cronJobs },
     { to: '/sessions', icon: MessageSquare, label: '会话管理' },
     { to: '/workspace', icon: FolderOpen, label: t.nav.workspace },
@@ -66,6 +115,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
     { to: '/channels', icon: Radio, label: t.nav.channels },
     ...(enableAgents ? [{ to: '/agents', icon: Bot, label: locale === 'zh-CN' ? '智能体' : 'Agents' }] : [{ to: '/plugins', icon: Puzzle, label: locale === 'zh-CN' ? '插件' : 'Plugins' }]),
+    { to: '/workflows', icon: GitBranch, label: locale === 'zh-CN' ? '工作流' : 'Flows' },
     { to: '/config', icon: Settings, label: t.nav.systemConfig },
   ];
 
@@ -123,6 +173,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     { label: '技能中心', keywords: ['skills', 'skill', '技能'], path: '/skills' },
     { label: '插件中心', keywords: ['plugins', 'plugin', '插件'], path: '/plugins' },
     ...(enableAgents ? [{ label: locale === 'zh-CN' ? '智能体' : 'Agents', keywords: ['agent', 'agents', '智能体'], path: '/agents' }] : []),
+    { label: locale === 'zh-CN' ? '工作流中心' : 'Workflow Center', keywords: ['workflow', 'workflows', '流程', '工作流'], path: '/workflows' },
     { label: '定时任务', keywords: ['cron', 'jobs', '定时任务'], path: '/cron' },
     { label: '会话管理', keywords: ['session', 'sessions', '会话'], path: '/sessions' },
     { label: '工作区', keywords: ['workspace', '工作区', '文件'], path: '/workspace' },

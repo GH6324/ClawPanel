@@ -7,7 +7,7 @@ const IS_DEMO = import.meta.env.VITE_DEMO === 'true';
 export interface LogEntry {
   id: string;
   time: number;
-  source: 'qq' | 'wechat' | 'system' | 'openclaw';
+  source: 'qq' | 'wechat' | 'wecom' | 'feishu' | 'system' | 'openclaw' | 'workflow';
   type: string;
   summary: string;
   detail?: string;

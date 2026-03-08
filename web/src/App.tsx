@@ -15,6 +15,7 @@ import Sessions from './pages/Sessions';
 import Workspace from './pages/Workspace';
 import Plugins from './pages/Plugins';
 import Agents from './pages/Agents';
+import Workflows from './pages/Workflows';
 
 export default function App() {
   const enableAgents = import.meta.env.VITE_FEATURE_AGENTS !== 'false';
@@ -43,6 +44,7 @@ export default function App() {
         {enableAgents && (
           <Route path="/agents" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Agents /></OpenClawRequired>} />
         )}
+        <Route path="/workflows" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Workflows /></OpenClawRequired>} />
         <Route path="/cron" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><CronJobs /></OpenClawRequired>} />
         <Route path="/sessions" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Sessions /></OpenClawRequired>} />
         <Route path="/config" element={<SystemConfig />} />

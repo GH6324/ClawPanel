@@ -157,6 +157,13 @@ func runServer(stopCh chan struct{}) {
 
 	// 初始化面板自检更新器
 	panelUpdater := update.NewUpdater(Version, cfg.DataDir)
+	workflowRuntime := handler.NewWorkflowRuntime(db, cfg, wsHub)
+	if err := handler.EnsureWorkflowDefaults(db); err != nil {
+		log.Printf("[ClawPanel] 工作流模板初始化失败: %v", err)
+	}
+	if evListener != nil {
+		evListener.SetInboundHandler(workflowRuntime.HandleInboundReply)
+	}
 
 	// 启动独立更新服务（进程隔离，独立端口）
 	updaterSrv := updater.NewServer(Version, cfg.DataDir, cfg.OpenClawDir, cfg.Port)
@@ -179,6 +186,7 @@ func runServer(stopCh chan struct{}) {
 	{
 		// 公开路由
 		api.POST("/auth/login", handler.Login(db, cfg))
+		api.POST("/workflows/intercept", workflowRuntime.InterceptInbound())
 
 		// 需要认证的路由
 		auth := api.Group("")
@@ -209,6 +217,10 @@ func runServer(stopCh chan struct{}) {
 			auth.PUT("/openclaw/channels/:id", handler.SaveChannel(cfg, procMgr))
 			auth.PUT("/openclaw/plugins/:id", handler.SavePlugin(cfg))
 			auth.POST("/openclaw/toggle-channel", handler.ToggleChannel(cfg, procMgr, napcatMon, sysLog))
+			auth.GET("/openclaw/qq-channel/state", handler.GetQQChannelState(cfg))
+			auth.POST("/openclaw/qq-channel/setup", handler.SetupQQChannel(cfg, taskMgr, procMgr))
+			auth.POST("/openclaw/qq-channel/repair", handler.RepairQQChannel(cfg, taskMgr, procMgr))
+			auth.POST("/openclaw/qq-channel/cleanup", handler.CleanupQQChannel(cfg, taskMgr, procMgr))
 			auth.POST("/openclaw/feishu-variant", handler.SwitchFeishuVariant(cfg, procMgr, sysLog))
 
 			// 进程管理
@@ -246,6 +258,18 @@ func runServer(stopCh chan struct{}) {
 
 			// AI 助手
 			auth.POST("/system/ai-chat", handler.AIChat(cfg))
+			auth.GET("/workflows/settings", workflowRuntime.GetSettings())
+			auth.PUT("/workflows/settings", workflowRuntime.SaveSettings())
+			auth.GET("/workflows/templates", workflowRuntime.ListTemplates())
+			auth.POST("/workflows/templates", workflowRuntime.SaveTemplate())
+			auth.DELETE("/workflows/templates/:id", workflowRuntime.DeleteTemplate())
+			auth.POST("/workflows/templates/generate", workflowRuntime.GenerateTemplate())
+			auth.GET("/workflows/runs", workflowRuntime.ListRuns())
+			auth.GET("/workflows/runs/:id", workflowRuntime.GetRun())
+			auth.POST("/workflows/templates/:id/run", workflowRuntime.StartRunFromTemplate())
+			auth.POST("/workflows/runs/:id/control", workflowRuntime.ControlRun())
+			auth.POST("/workflows/runs/:id/artifacts/resend", workflowRuntime.ResendArtifacts())
+			auth.DELETE("/workflows/runs/:id", workflowRuntime.DeleteRun())
 
 			// OpenClaw 更新
 			auth.POST("/system/check-update", handler.CheckUpdate(cfg))
@@ -345,8 +369,8 @@ func runServer(stopCh chan struct{}) {
 			auth.GET("/plugins/installed", handler.GetInstalledPlugins(pluginMgr))
 			auth.GET("/plugins/:id", handler.GetPluginDetail(pluginMgr))
 			auth.POST("/plugins/registry/refresh", handler.RefreshPluginRegistry(pluginMgr))
-			auth.POST("/plugins/install", handler.InstallPlugin(pluginMgr))
-			auth.DELETE("/plugins/:id", handler.UninstallPlugin(pluginMgr))
+			auth.POST("/plugins/install", handler.InstallPlugin(pluginMgr, taskMgr))
+			auth.DELETE("/plugins/:id", handler.UninstallPlugin(pluginMgr, taskMgr))
 			auth.PUT("/plugins/:id/toggle", handler.TogglePlugin(pluginMgr))
 			auth.GET("/plugins/:id/config", handler.GetPluginConfig(pluginMgr))
 			auth.PUT("/plugins/:id/config", handler.UpdatePluginConfig(pluginMgr))

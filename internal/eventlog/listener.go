@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -16,16 +17,17 @@ import (
 
 // Listener monitors OneBot11 WebSocket for message events and records them
 type Listener struct {
-	db            *sql.DB
-	hub           *websocket.Hub
-	wsURL         string
-	token         string
-	tokenProvider func() string
-	conn          *gorilla.Conn
-	mu            sync.Mutex
-	stopCh        chan struct{}
-	running       bool
-	sysLog        *SystemLogger
+	db             *sql.DB
+	hub            *websocket.Hub
+	wsURL          string
+	token          string
+	tokenProvider  func() string
+	inboundHandler func(channelID, conversationID, userID, text string)
+	conn           *gorilla.Conn
+	mu             sync.Mutex
+	stopCh         chan struct{}
+	running        bool
+	sysLog         *SystemLogger
 }
 
 // NewListener creates a new event listener
@@ -130,6 +132,12 @@ func (l *Listener) currentToken() string {
 	return strings.TrimSpace(l.token)
 }
 
+func (l *Listener) SetInboundHandler(handler func(channelID, conversationID, userID, text string)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inboundHandler = handler
+}
+
 func (l *Listener) listen() {
 	defer func() {
 		l.mu.Lock()
@@ -176,6 +184,7 @@ func (l *Listener) processMessage(raw []byte) {
 
 	switch postType {
 	case "message", "message_sent":
+		l.handleInboundMessage(msg)
 		event = l.parseMessageEvent(msg)
 	case "notice":
 		event = l.parseNoticeEvent(msg)
@@ -211,35 +220,93 @@ func (l *Listener) processMessage(raw []byte) {
 	l.hub.Broadcast(wsMsg)
 }
 
-func (l *Listener) parseMessageEvent(msg map[string]interface{}) *model.Event {
-	msgType, _ := msg["message_type"].(string)
+func (l *Listener) handleInboundMessage(msg map[string]interface{}) {
+	selfID := normalizeOneBotID(msg["self_id"])
+	userID := normalizeOneBotID(msg["user_id"])
+	if selfID == "" || userID == "" || selfID == userID {
+		return
+	}
+	messageType, _ := msg["message_type"].(string)
+	conversationID := ""
+	switch messageType {
+	case "group":
+		groupID := normalizeOneBotID(msg["group_id"])
+		if groupID != "" {
+			conversationID = "qq:group:" + groupID
+		}
+	default:
+		conversationID = "qq:private:" + userID
+	}
+	text := extractRawMessageText(msg)
+	if conversationID == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	l.mu.Lock()
+	handler := l.inboundHandler
+	l.mu.Unlock()
+	if handler != nil {
+		go handler("qq", conversationID, userID, text)
+	}
+}
+
+func normalizeOneBotID(v interface{}) string {
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return ""
+		}
+		return fmt.Sprintf("%.0f", n)
+	case float32:
+		return fmt.Sprintf("%.0f", n)
+	case int, int8, int16, int32, int64:
+		return fmt.Sprintf("%d", n)
+	case uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", n)
+	case string:
+		return strings.TrimSpace(n)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func extractRawMessageText(msg map[string]interface{}) string {
 	rawMsg, _ := msg["raw_message"].(string)
-	if rawMsg == "" {
-		// Try to extract from message array
-		if msgArr, ok := msg["message"].([]interface{}); ok {
-			var parts []string
-			for _, m := range msgArr {
-				if mm, ok := m.(map[string]interface{}); ok {
-					if t, _ := mm["type"].(string); t == "text" {
-						if d, ok := mm["data"].(map[string]interface{}); ok {
-							if text, _ := d["text"].(string); text != "" {
-								parts = append(parts, text)
-							}
-						}
-					} else if t == "image" {
-						parts = append(parts, "[图片]")
-					} else if t == "face" {
-						parts = append(parts, "[表情]")
-					} else if t == "at" {
-						parts = append(parts, "[At]")
-					} else {
-						parts = append(parts, fmt.Sprintf("[%s]", t))
+	if rawMsg != "" {
+		return strings.TrimSpace(rawMsg)
+	}
+	if msgArr, ok := msg["message"].([]interface{}); ok {
+		var parts []string
+		for _, m := range msgArr {
+			mm, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t, _ := mm["type"].(string)
+			switch t {
+			case "text":
+				if d, ok := mm["data"].(map[string]interface{}); ok {
+					if text, _ := d["text"].(string); text != "" {
+						parts = append(parts, text)
 					}
 				}
+			case "image":
+				parts = append(parts, "[图片]")
+			case "face":
+				parts = append(parts, "[表情]")
+			case "at":
+				parts = append(parts, "[At]")
+			default:
+				parts = append(parts, fmt.Sprintf("[%s]", t))
 			}
-			rawMsg = strings.Join(parts, "")
 		}
+		return strings.TrimSpace(strings.Join(parts, ""))
 	}
+	return ""
+}
+
+func (l *Listener) parseMessageEvent(msg map[string]interface{}) *model.Event {
+	msgType, _ := msg["message_type"].(string)
+	rawMsg := extractRawMessageText(msg)
 
 	selfID := fmt.Sprintf("%v", msg["self_id"])
 	userID := fmt.Sprintf("%v", msg["user_id"])

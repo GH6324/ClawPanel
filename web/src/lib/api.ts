@@ -104,6 +104,10 @@ const _api = {
   checkConfig: () => get('/openclaw/config/check'),
   fixConfig: (issueIds: string[]) => post('/openclaw/config/fix', { issueIds }),
   toggleChannel: (channelId: string, enabled: boolean) => post('/openclaw/toggle-channel', { channelId, enabled }),
+  getQQChannelState: () => get('/openclaw/qq-channel/state'),
+  setupQQChannel: () => post('/openclaw/qq-channel/setup'),
+  repairQQChannel: () => post('/openclaw/qq-channel/repair'),
+  cleanupQQChannel: () => post('/openclaw/qq-channel/cleanup'),
   switchFeishuVariant: (variant: 'official' | 'clawteam') => post('/openclaw/feishu-variant', { variant }),
   // WeChat
   wechatStatus: () => get('/wechat/status'),
@@ -196,12 +200,25 @@ const _api = {
   getPluginDetail: (id: string) => get(`/plugins/${id}`),
   refreshPluginRegistry: () => post('/plugins/registry/refresh'),
   installPlugin: (pluginId: string, source?: string) => post('/plugins/install', { pluginId, source }),
-  uninstallPlugin: (id: string) => del(`/plugins/${id}`),
+  uninstallPlugin: (id: string, cleanupConfig: boolean = true) => del(`/plugins/${id}?cleanupConfig=${cleanupConfig ? 'true' : 'false'}`),
   togglePlugin: (id: string, enabled: boolean) => put(`/plugins/${id}/toggle`, { enabled }),
   getPluginConfig: (id: string) => get(`/plugins/${id}/config`),
   updatePluginConfig: (id: string, config: any) => put(`/plugins/${id}/config`, config),
   getPluginLogs: (id: string) => get(`/plugins/${id}/logs`),
   updatePluginVersion: (id: string) => post(`/plugins/${id}/update`),
+  // Workflow Center
+  getWorkflowSettings: () => get('/workflows/settings'),
+  updateWorkflowSettings: (data: any) => put('/workflows/settings', data),
+  getWorkflowTemplates: () => get('/workflows/templates'),
+  saveWorkflowTemplate: (template: any) => post('/workflows/templates', { template }),
+  deleteWorkflowTemplate: (id: string) => del(`/workflows/templates/${id}`),
+  generateWorkflowTemplate: (prompt: string, category?: string, settings?: any) => postLong('/workflows/templates/generate', { prompt, category, settings }, 120000),
+  getWorkflowRuns: (status?: string) => get(`/workflows/runs${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  getWorkflowRun: (id: string) => get(`/workflows/runs/${id}`),
+  startWorkflowRun: (templateId: string, data?: any) => post(`/workflows/templates/${templateId}/run`, data || {}),
+  controlWorkflowRun: (id: string, action: string, reply?: string) => post(`/workflows/runs/${id}/control`, { action, reply }),
+  resendWorkflowArtifact: (id: string, data: { stepKey?: string; fileName?: string }) => post(`/workflows/runs/${id}/artifacts/resend`, data),
+  deleteWorkflowRun: (id: string) => del(`/workflows/runs/${id}`),
 };
 
 // In demo mode, replace all API calls with mock data

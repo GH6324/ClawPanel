@@ -616,3 +616,4 @@ func TestSaveChannelQQReturnsMessageWithoutProcessManager(t *testing.T) {
 		t.Fatalf("expected ok response, got %#v", resp)
 	}
 }
+

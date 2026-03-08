@@ -1,0 +1,21 @@
+{
+  "latest_version": "5.2.2",
+  "release_time": "2026-03-08T16:50:00+08:00",
+  "release_note": "## v5.2.2 - 安装链路加速与插件配置收口\n\n### 安装链路\n- Linux / macOS / Windows 安装脚本改为优先从加速服务器拉取最新版本信息与安装包，失败后再回退 GitHub Release\n- README 默认安装命令改为加速服务器脚本地址，降低国内安装失败率\n\n### 插件与通道\n- 飞书拆分为官方版与社区版两个独立通道入口\n- 插件安装优先走 OpenClaw 官方命令，失败后回退兼容安装方式，并写入消息中心\n- 插件卸载支持选择“仅卸载插件”或“卸载并清理通道配置”\n- 通道页开始基于 configSchema 自动补充未手写的基础字段\n\n### 稳定性\n- 插件卸载后按插件类型清理对应通道残留配置，飞书双版本保留互斥保护\n- 飞书双通道启用/禁用显式映射到底层 channels.feishu 与正确插件 entry，避免状态错乱",
+  "download_urls": {
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.2-linux-amd64",
+    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.2-linux-arm64",
+    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.2-darwin-amd64",
+    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.2-darwin-arm64",
+    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.2-windows-amd64.exe"
+  },
+  "sha256": {
+    "linux_amd64": "598c1667e313ad681e08de89c99571fd7affaa9f9af06d350a1f5d646e38fa60",
+    "linux_arm64": "6de5838fa05090b27c1a53721d08a3fcff430b78ba55aed0b02b87491605fc26",
+    "darwin_amd64": "a5342c67ec9d444b04403b8237729983e2d85710a270ecb7a8063c72259096eb",
+    "darwin_arm64": "91a27813934470b5dc23b0f069b4c42ae143cd72d7017ace77a102ca15a8710d",
+    "windows_amd64": "29e7b4b00ce9b410da9c17c5757a9aaaff8d43c80b7db49e40bb3212c13845fb"
+  },
+  "major_change": false,
+  "change_warning": ""
+}

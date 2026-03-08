@@ -840,23 +840,14 @@ func (m *Manager) ensureOpenClawConfig() {
 		changed = true
 	}
 
-	// Write QQ plugin config when QQ extension is installed.
-	//
-	// Root cause fixed here:
-	// - Previously we only injected channels.qq when NapCat was already running.
-	// - If OpenClaw started before NapCat, QQ channel config was skipped and
-	//   incoming QQ messages could not be routed to OpenClaw, resulting in
-	//   "QQ receives message but no reply" symptoms.
-	//
-	// The actual safety condition is "QQ extension installed". Whether NapCat is
-	// currently online should not block channel config injection.
 	qqExtDir := filepath.Join(ocDir, "extensions", "qq")
-	qqInstalled := false
+	qqExtInstalled := false
 	if _, err := os.Stat(qqExtDir); err == nil {
-		qqInstalled = true
+		qqExtInstalled = true
 	}
+	qqShouldManage, qqManagedByNapCat := m.shouldManageQQIntegration(cfg, qqExtDir)
 
-	if qqInstalled {
+	if qqExtInstalled && qqShouldManage {
 		// Ensure channels.qq with wsUrl
 		ch, _ := cfg["channels"].(map[string]interface{})
 		if ch == nil {
@@ -872,7 +863,7 @@ func (m *Manager) ensureOpenClawConfig() {
 			qq["wsUrl"] = "ws://127.0.0.1:3001"
 			changed = true
 		}
-		if qq["enabled"] == nil {
+		if qqManagedByNapCat && qq["enabled"] == nil {
 			qq["enabled"] = true
 			changed = true
 		}
@@ -889,8 +880,15 @@ func (m *Manager) ensureOpenClawConfig() {
 			pl["entries"] = ent
 		}
 		if ent["qq"] == nil {
-			ent["qq"] = map[string]interface{}{"enabled": true}
+			ent["qq"] = map[string]interface{}{"enabled": qqManagedByNapCat}
 			changed = true
+		} else if entry, ok := ent["qq"].(map[string]interface{}); ok && entry != nil {
+			if qqManagedByNapCat {
+				if _, ok := entry["enabled"]; !ok {
+					entry["enabled"] = true
+					changed = true
+				}
+			}
 		}
 
 		// Ensure plugins.installs.qq
@@ -922,6 +920,29 @@ func (m *Manager) ensureOpenClawConfig() {
 		}
 	}
 
+	if !qqShouldManage {
+		if ch, ok := cfg["channels"].(map[string]interface{}); ok && ch != nil {
+			if _, exists := ch["qq"]; exists {
+				delete(ch, "qq")
+				changed = true
+			}
+		}
+		if pl, ok := cfg["plugins"].(map[string]interface{}); ok && pl != nil {
+			if ent, ok := pl["entries"].(map[string]interface{}); ok && ent != nil {
+				if _, exists := ent["qq"]; exists {
+					delete(ent, "qq")
+					changed = true
+				}
+			}
+			if ins, ok := pl["installs"].(map[string]interface{}); ok && ins != nil {
+				if _, exists := ins["qq"]; exists {
+					delete(ins, "qq")
+					changed = true
+				}
+			}
+		}
+	}
+
 	if changed {
 		out, err := json.MarshalIndent(cfg, "", "  ")
 		if err != nil {
@@ -946,7 +967,109 @@ func (m *Manager) ensureOpenClawConfig() {
 			}
 		}
 	}
-	m.patchQQPluginChannel(ocDir, qqInstallPath)
+	if qqShouldManage {
+		m.patchQQPluginChannel(ocDir, qqInstallPath)
+	}
+	m.patchWecomPluginChannel(ocDir)
+	m.patchFeishuPluginChannel(ocDir)
+}
+
+func (m *Manager) shouldManageQQIntegration(ocConfig map[string]interface{}, qqExtDir string) (bool, bool) {
+	pluginInstalled := m.isPanelPluginInstalled("qq")
+	napcatInstalled := m.hasManagedNapCatInstall()
+	if !pluginInstalled && !napcatInstalled && !m.qqChannelSetupMarked() {
+		return false, false
+	}
+	if strings.TrimSpace(qqExtDir) != "" {
+		if _, err := os.Stat(qqExtDir); err != nil {
+			return false, napcatInstalled
+		}
+	}
+	hasExistingQQConfig := false
+	if ocConfig != nil {
+		if channels, ok := ocConfig["channels"].(map[string]interface{}); ok && channels != nil {
+			if _, ok := channels["qq"].(map[string]interface{}); ok {
+				hasExistingQQConfig = true
+			}
+		}
+		if pl, ok := ocConfig["plugins"].(map[string]interface{}); ok && pl != nil {
+			if ent, ok := pl["entries"].(map[string]interface{}); ok && ent != nil {
+				if _, ok := ent["qq"].(map[string]interface{}); ok {
+					hasExistingQQConfig = true
+				}
+			}
+			if ins, ok := pl["installs"].(map[string]interface{}); ok && ins != nil {
+				if _, ok := ins["qq"].(map[string]interface{}); ok {
+					hasExistingQQConfig = true
+				}
+			}
+		}
+	}
+	if !m.qqChannelSetupMarked() && !hasExistingQQConfig {
+		return false, false
+	}
+	return pluginInstalled || napcatInstalled || hasExistingQQConfig, napcatInstalled
+}
+
+func (m *Manager) qqChannelSetupMarked() bool {
+	if m.cfg == nil || strings.TrimSpace(m.cfg.DataDir) == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(m.cfg.DataDir, "qq-channel-enabled.flag"))
+	return err == nil
+}
+
+func (m *Manager) isPanelPluginInstalled(pluginID string) bool {
+	pluginID = strings.TrimSpace(pluginID)
+	if pluginID == "" || m.cfg == nil || strings.TrimSpace(m.cfg.DataDir) == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(m.cfg.DataDir, "plugins.json"))
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	var state map[string]map[string]interface{}
+	if json.Unmarshal(data, &state) != nil {
+		return false
+	}
+	item, ok := state[pluginID]
+	if !ok || item == nil {
+		return false
+	}
+	if dir, _ := item["dir"].(string); strings.TrimSpace(dir) != "" {
+		if _, err := os.Stat(dir); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) hasManagedNapCatInstall() bool {
+	if m.isNapCatRunning() {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		home, _ := os.UserHomeDir()
+		candidates := []string{
+			filepath.Join(home, "NapCat"),
+			filepath.Join(home, "Desktop", "NapCat"),
+			`C:\NapCat`,
+			filepath.Join(home, "AppData", "Local", "NapCat"),
+		}
+		for _, dir := range candidates {
+			if strings.TrimSpace(dir) == "" {
+				continue
+			}
+			if _, err := os.Stat(dir); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	if out, err := runDockerOutput("inspect", "openclaw-qq"); err == nil && len(out) > 0 {
+		return true
+	}
+	return false
 }
 
 // patchQQPluginChannelTS fixes the critical bug where the QQ plugin's startAccount
@@ -996,11 +1119,14 @@ func (m *Manager) patchQQPluginChannel(ocDir, installPath string) {
 
 	loggerPattern := regexp.MustCompile(`(?s)function\s+postLogEntry\s*\([^)]*\)\s*\{.*?\n\}`)
 	managerURLPattern := regexp.MustCompile(`const\s+MANAGER_LOG_URL\s*=\s*"[^"]*";`)
+	workflowInterceptPattern := regexp.MustCompile(`const\s+WORKFLOW_INTERCEPT_URL\s*=\s*"[^"]*";`)
+	workflowInsertPattern := regexp.MustCompile(`const\s+fromId\s*=\s+isGroup\s*\?\s*"group:"\s*\+\s*groupId\s*:\s*String\(userId\);`)
 	managerPort := 19527
 	if m.cfg != nil && m.cfg.Port > 0 {
 		managerPort = m.cfg.Port
 	}
 	managerURLLine := fmt.Sprintf(`const MANAGER_LOG_URL = "http://127.0.0.1:%d/api/events/log";`, managerPort)
+	workflowURLLine := fmt.Sprintf("const WORKFLOW_INTERCEPT_URL = \"http://127.0.0.1:%d/api/workflows/intercept\";\nconst WORKFLOW_TOKEN = %q;", managerPort, strings.TrimSpace(m.cfg.AdminToken))
 	loggerReplacement := `function postLogEntry(summary, detail, source) {
   try {
     const payload = {
@@ -1018,7 +1144,40 @@ func (m *Manager) patchQQPluginChannel(ocDir, installPath string) {
       }).catch(() => {});
     }
   } catch {}
+}
+
+async function shouldInterceptWorkflow(payload) {
+  try {
+    const f = (globalThis && globalThis.fetch) ? globalThis.fetch.bind(globalThis) : null;
+    if (!f) return false;
+    const resp = await f(WORKFLOW_INTERCEPT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Workflow-Token": WORKFLOW_TOKEN,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!resp || !resp.ok) return false;
+    const data = await resp.json().catch(() => null);
+    return !!(data && data.handled);
+  } catch {
+    return false;
+  }
 }`
+	workflowInterceptBlock := `const workflowConversationId = isGroup ? "qq:group:" + groupId : "qq:private:" + userId;
+        if (await shouldInterceptWorkflow({
+          channelId: "qq",
+          conversationId: workflowConversationId,
+          userId: String(userId || ""),
+          text,
+        })) {
+          console.log("[QQ] Workflow intercepted message for " + workflowConversationId);
+          processingMessages.delete(dedupKey);
+          return;
+        }
+
+        const fromId = isGroup ? "group:" + groupId : String(userId);`
 
 	patchedAny := false
 	for _, p := range paths {
@@ -1043,9 +1202,25 @@ func (m *Manager) patchQQPluginChannel(ocDir, installPath string) {
 			}
 		}
 
-		if strings.Contains(patched, "const http = require(\"http\")") && loggerPattern.MatchString(patched) {
+		if !workflowInterceptPattern.MatchString(patched) && strings.Contains(patched, managerURLLine) {
+			next := strings.Replace(patched, managerURLLine, managerURLLine+"\n"+workflowURLLine, 1)
+			if next != patched {
+				patched = next
+				fileChanged = true
+			}
+		}
+
+		if loggerPattern.MatchString(patched) && !strings.Contains(patched, "async function shouldInterceptWorkflow") {
 			patched = loggerPattern.ReplaceAllString(patched, loggerReplacement)
 			fileChanged = true
+		}
+
+		if !strings.Contains(patched, "Workflow intercepted message") && workflowInsertPattern.MatchString(patched) {
+			next := workflowInsertPattern.ReplaceAllString(patched, workflowInterceptBlock)
+			if next != patched {
+				patched = next
+				fileChanged = true
+			}
 		}
 
 		if !fileChanged {
@@ -1062,6 +1237,233 @@ func (m *Manager) patchQQPluginChannel(ocDir, installPath string) {
 
 	if !patchedAny {
 		log.Println("[ProcessMgr] QQ channel 兼容补丁未命中（可能已修复或版本结构不同）")
+	}
+}
+
+func (m *Manager) patchWecomPluginChannel(ocDir string) {
+	paths := []string{}
+	if ocDir != "" {
+		paths = append(paths, filepath.Join(ocDir, "extensions", "wecom", "dist", "index.js"))
+	}
+	if m.cfg != nil && m.cfg.OpenClawApp != "" {
+		paths = append(paths, filepath.Join(m.cfg.OpenClawApp, "extensions", "wecom", "dist", "index.js"))
+	}
+	managerPort := 19527
+	if m.cfg != nil && m.cfg.Port > 0 {
+		managerPort = m.cfg.Port
+	}
+	inboundLogSnippet := fmt.Sprintf("try {\n      const f = globalThis && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;\n      if (f && rawBody && rawBody.trim()) {\n        f(\"http://127.0.0.1:%d/api/events/log\", {\n          method: \"POST\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify({\n            source: \"wecom\",\n            type: \"wecom.message.received\",\n            summary: \"[企微] \" + fromLabel + \": \" + rawBody,\n            detail: \"to=\" + to + \"\\nmsgid=\" + (msg.msgid || \"\")\n          })\n        }).catch(() => {});\n      }\n    } catch {}", managerPort)
+	replyLogSnippet := fmt.Sprintf("if (normalized.trim()) {\n            try {\n              const f = globalThis && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;\n              if (f) {\n                f(\"http://127.0.0.1:%d/api/events/log\", {\n                  method: \"POST\",\n                  headers: { \"Content-Type\": \"application/json\" },\n                  body: JSON.stringify({\n                    source: \"openclaw\",\n                    type: \"openclaw.reply\",\n                    summary: \"[企微回复] \" + normalized,\n                    detail: \"channel=wecom\\nto=\" + to\n                  })\n                }).catch(() => {});\n              }\n            } catch {}\n          }\n          await hooks.onChunk(normalized);", managerPort)
+	interceptBlock := fmt.Sprintf(`const workflowInterceptResp = await (async () => {
+      try {
+        const f = globalThis && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;
+        if (!f) return null;
+        const resp = await f("http://127.0.0.1:%d/api/workflows/intercept", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Workflow-Token": %q
+          },
+          body: JSON.stringify({
+            channelId: "wecom",
+            conversationId: from,
+            userId: senderId,
+            text: rawBody,
+            context: {
+              responseUrl,
+              wecomTo: to,
+              sessionKey: route.sessionKey
+            }
+          })
+        });
+        if (!resp || !resp.ok) return null;
+        return await resp.json().catch(() => null);
+      } catch {
+        return null;
+      }
+    })();
+    if (workflowInterceptResp && workflowInterceptResp.handled) {
+      if (workflowInterceptResp.reply) {
+        await hooks.onChunk(String(workflowInterceptResp.reply));
+      }
+      return;
+    }
+    await channel.reply.dispatchReplyWithBufferedBlockDispatcher({`, managerPort, strings.TrimSpace(m.cfg.AdminToken))
+	patchedAny := false
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		next := content
+		changed := false
+		if !strings.Contains(next, "/api/workflows/intercept") {
+			replaced := strings.Replace(next, `await channel.reply.dispatchReplyWithBufferedBlockDispatcher({`, interceptBlock, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !strings.Contains(next, "wecom.message.received") {
+			replaced := strings.Replace(next, `const fromLabel = chatType === "group" ? `+"`group:${chatId}`"+` : `+"`user:${senderId}`"+`;`, `const fromLabel = chatType === "group" ? `+"`group:${chatId}`"+` : `+"`user:${senderId}`"+`;
+    `+inboundLogSnippet, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !strings.Contains(next, "[企微回复]") {
+			replaced := strings.Replace(next, `await hooks.onChunk(normalized);`, replyLogSnippet, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if strings.Contains(next, `text: rawBody`) && !strings.Contains(next, `responseUrl`) {
+			replaced := strings.Replace(next, `text: rawBody`, `text: rawBody,
+            context: {
+              responseUrl,
+              wecomTo: to,
+              sessionKey: route.sessionKey
+            }`, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := os.WriteFile(p, []byte(next), 0644); err != nil {
+			log.Printf("[ProcessMgr] WeCom 插件补丁写入失败 (%s): %v", p, err)
+			continue
+		}
+		patchedAny = true
+		log.Printf("[ProcessMgr] ✅ WeCom 工作流拦截补丁已应用: %s", p)
+	}
+	if !patchedAny {
+		log.Println("[ProcessMgr] WeCom 工作流拦截补丁未命中（可能已应用或文件结构不同）")
+	}
+}
+
+func (m *Manager) patchFeishuPluginChannel(ocDir string) {
+	paths := []string{}
+	if ocDir != "" {
+		paths = append(paths, filepath.Join(ocDir, "extensions", "feishu", "src", "channel.ts"))
+	}
+	if m.cfg != nil && m.cfg.OpenClawApp != "" {
+		paths = append(paths, filepath.Join(m.cfg.OpenClawApp, "extensions", "feishu", "src", "channel.ts"))
+	}
+	managerPort := 19527
+	if m.cfg != nil && m.cfg.Port > 0 {
+		managerPort = m.cfg.Port
+	}
+	managerURLLine := fmt.Sprintf("const MANAGER_LOG_URL = \"http://127.0.0.1:%d/api/events/log\";", managerPort)
+	logHelper := `async function postLogEntry(source: string, type: string, summary: string, detail = "") {
+  try {
+    const f = globalThis && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;
+    if (!f || !summary) return;
+    await f(MANAGER_LOG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, type, summary, detail }),
+    }).catch(() => {});
+  } catch {}
+}`
+	interceptBlock := fmt.Sprintf(`const workflowInterceptResp = await (async () => {
+            try {
+              const f = globalThis && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;
+              if (!f) return null;
+              const resp = await f("http://127.0.0.1:%d/api/workflows/intercept", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Workflow-Token": %q,
+                },
+                body: JSON.stringify({
+                  channelId: "feishu",
+                  conversationId: msgCtx.From,
+                  userId: message.senderId,
+                  text: message.text,
+                }),
+              });
+              if (!resp || !resp.ok) return null;
+              return await resp.json().catch(() => null);
+            } catch {
+              return null;
+            }
+          })();
+
+          if (workflowInterceptResp?.handled) {
+            if (workflowInterceptResp.reply) {
+              await sendTextMessage(account, message.chatId, String(workflowInterceptResp.reply));
+            }
+            return;
+          }
+
+          await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({`, managerPort, strings.TrimSpace(m.cfg.AdminToken))
+	patchedAny := false
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		next := content
+		changed := false
+		if !strings.Contains(next, "MANAGER_LOG_URL") && strings.Contains(next, `const CHANNEL_ID = "feishu" as const;`) {
+			replaced := strings.Replace(next, `const CHANNEL_ID = "feishu" as const;`, "const CHANNEL_ID = \"feishu\" as const;\n"+managerURLLine+"\n"+logHelper, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !strings.Contains(next, "/api/workflows/intercept") {
+			replaced := strings.Replace(next, `await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({`, interceptBlock, 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if strings.Contains(next, `conversationId: msgCtx.From,`) {
+			replaced := strings.ReplaceAll(next, `conversationId: msgCtx.From,`, `conversationId: message.chatId,`)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !strings.Contains(next, "feishu.message.received") {
+			replaced := strings.Replace(next, "console.log(`[feishu:${account.accountId}] 收到消息: ${message.text}`);", "console.log(`[feishu:${account.accountId}] 收到消息: ${message.text}`);\n          await postLogEntry(\"feishu\", \"feishu.message.received\", \"[飞书] \" + message.senderId + \": \" + message.text, \"chatId=\" + message.chatId + \"\\nchatType=\" + message.chatType);", 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !strings.Contains(next, "[飞书回复]") {
+			replaced := strings.Replace(next, "await sendTextMessage(account, message.chatId, String(workflowInterceptResp.reply));", "await sendTextMessage(account, message.chatId, String(workflowInterceptResp.reply));\n              await postLogEntry(\"openclaw\", \"openclaw.reply\", \"[飞书回复] \" + String(workflowInterceptResp.reply), \"channel=feishu\\nchatId=\" + message.chatId);", 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+			replaced = strings.Replace(next, "await sendTextMessage(account, message.chatId, text);", "await sendTextMessage(account, message.chatId, text);\n                    await postLogEntry(\"openclaw\", \"openclaw.reply\", \"[飞书回复] \" + text, \"channel=feishu\\nchatId=\" + message.chatId);", 1)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := os.WriteFile(p, []byte(next), 0644); err != nil {
+			log.Printf("[ProcessMgr] Feishu 插件补丁写入失败 (%s): %v", p, err)
+			continue
+		}
+		patchedAny = true
+		log.Printf("[ProcessMgr] ✅ Feishu 工作流拦截补丁已应用: %s", p)
+	}
+	if !patchedAny {
+		log.Println("[ProcessMgr] Feishu 工作流拦截补丁未命中（可能已应用或文件结构不同）")
 	}
 }
 
