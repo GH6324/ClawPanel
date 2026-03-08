@@ -53,6 +53,9 @@ interface AgentFormState {
   sandboxDockerSetupCommand: string;
   sandboxDockerBinds: string;
   groupChatMode: InheritToggle;
+  toolProfile: '' | 'minimal' | 'coding' | 'messaging' | 'full';
+  toolAllow: string;
+  toolDeny: string;
   agentToAgentMode: InheritToggle;
   agentToAgentAllow: string;
   sessionVisibility: '' | 'same-agent' | 'all-agents';
@@ -199,6 +202,9 @@ const DEFAULT_AGENT_FORM: AgentFormState = {
   sandboxDockerSetupCommand: '',
   sandboxDockerBinds: '',
   groupChatMode: 'inherit',
+  toolProfile: '',
+  toolAllow: '',
+  toolDeny: '',
   agentToAgentMode: 'inherit',
   agentToAgentAllow: '',
   sessionVisibility: '',
@@ -236,6 +242,14 @@ const AGENT_DIRECTORY_TABS: { id: AgentDetailTab; title: string; description: st
   { id: 'capabilities', title: '技能与上下文 (Skills · Channels · Cron)', description: '补齐官方单 Agent 面板的运行态快照' },
   { id: 'context', title: '路由上下文 (Routing Context)', description: '查看它被哪些规则和会话引用' },
   { id: 'advanced', title: '高级 JSON (Advanced)', description: '需要完整 JSON 时再进入' },
+];
+
+const TOOL_POLICY_PRESETS: Array<{ id: '' | 'minimal' | 'coding' | 'messaging' | 'full'; label: string; help: string }> = [
+  { id: '', label: 'Inherit', help: '不写 per-agent profile，继续继承全局工具策略。' },
+  { id: 'minimal', label: 'Minimal', help: '只保留最小会话能力，适合作为最保守的起点。' },
+  { id: 'coding', label: 'Coding', help: '偏向编码/文件/运行时工具，适合代码型 Agent。' },
+  { id: 'messaging', label: 'Messaging', help: '偏向消息入口与渠道协作，适合路由型 Agent。' },
+  { id: 'full', label: 'Full', help: '完整工具面；除非明确需要，否则不建议长期给高权限 Agent。' },
 ];
 
 const AGENT_CORE_FILE_META: Record<string, { label: string; description: string }> = {
@@ -1075,6 +1089,12 @@ function createAgentFormState(agent?: AgentItem): AgentFormState {
     sandboxDockerSetupCommand: sandboxDraft.dockerSetupCommand,
     sandboxDockerBinds: sandboxDraft.dockerBinds,
     groupChatMode: triStateFromValue(getNestedValue(groupChat, 'enabled')),
+    toolProfile: (() => {
+      const raw = getNestedValue(tools, 'profile');
+      return raw === 'minimal' || raw === 'coding' || raw === 'messaging' || raw === 'full' ? raw : '';
+    })(),
+    toolAllow: parseStringList(getNestedValue(tools, 'allow')).join(', '),
+    toolDeny: parseStringList(getNestedValue(tools, 'deny')).join(', '),
     agentToAgentMode: triStateFromValue(getNestedValue(tools, 'agentToAgent.enabled')),
     agentToAgentAllow: parseStringList(getNestedValue(tools, 'agentToAgent.allow')).join(', '),
     sessionVisibility: (() => {
@@ -1343,6 +1363,22 @@ export default function Agents() {
   const updateSandboxForm = (patch: Partial<AgentFormState>) => {
     updateForm(patch, 'sandbox');
     setSandboxClearIntent(false);
+  };
+
+  const applyToolPolicyPreset = (preset: AgentFormState['toolProfile']) => {
+    updateForm({ toolProfile: preset }, 'tools');
+  };
+
+  const applyHeadlessToolPreset = () => {
+    updateForm({
+      toolProfile: 'minimal',
+      toolAllow: 'group:web, group:fs',
+      toolDeny: 'group:runtime, group:ui, group:nodes, group:automation',
+    }, 'tools');
+  };
+
+  const resetToolPolicyOverrides = () => {
+    updateForm({ toolProfile: '', toolAllow: '', toolDeny: '' }, 'tools');
   };
 
   const closeForm = () => {
@@ -1659,6 +1695,12 @@ export default function Agents() {
         sandboxDockerSetupCommand: sandboxDraft.dockerSetupCommand,
         sandboxDockerBinds: sandboxDraft.dockerBinds,
         groupChatMode: triStateFromValue(isPlainObject(groupChatObj) ? getNestedValue(groupChatObj, 'enabled') : undefined),
+        toolProfile: (() => {
+          const raw = isPlainObject(toolsObj) ? getNestedValue(toolsObj, 'profile') : '';
+          return raw === 'minimal' || raw === 'coding' || raw === 'messaging' || raw === 'full' ? raw : '';
+        })(),
+        toolAllow: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'allow')).join(', ') : '',
+        toolDeny: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'deny')).join(', ') : '',
         agentToAgentMode: triStateFromValue(isPlainObject(toolsObj) ? getNestedValue(toolsObj, 'agentToAgent.enabled') : undefined),
         agentToAgentAllow: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'agentToAgent.allow')).join(', ') : '',
         sessionVisibility: (() => {
@@ -1785,6 +1827,14 @@ export default function Agents() {
           throw new Error('tools JSON 必须是对象才能与结构化字段合并');
         }
         const nextTools = isPlainObject(toolsObj) ? deepClone(toolsObj) : {};
+        if (form.toolProfile) nextTools.profile = form.toolProfile;
+        else delete nextTools.profile;
+        const toolAllowList = parseCSV(form.toolAllow);
+        if (toolAllowList.length > 0) nextTools.allow = toolAllowList;
+        else delete nextTools.allow;
+        const toolDenyList = parseCSV(form.toolDeny);
+        if (toolDenyList.length > 0) nextTools.deny = toolDenyList;
+        else delete nextTools.deny;
         const agentToAgentEnabled = triStateToValue(form.agentToAgentMode);
         if (agentToAgentEnabled === undefined) deleteNestedValue(nextTools, 'agentToAgent.enabled');
         else setNestedValue(nextTools, 'agentToAgent.enabled', agentToAgentEnabled);
@@ -1849,8 +1899,10 @@ export default function Agents() {
       default: effectiveIsDefault,
     };
     const clearsSandboxOverride = structuredTouched.sandbox && sandboxObj === undefined && form.sandboxText.trim() !== '' && !!editingId;
+    const clearsToolsOverride = structuredTouched.tools && toolsObj === undefined && form.toolsText.trim() !== '' && !!editingId;
     if (modelObj !== undefined) payload.model = modelObj;
-    if (toolsObj !== undefined) payload.tools = toolsObj;
+    if (clearsToolsOverride && editingId) payload.tools = null;
+    else if (toolsObj !== undefined) payload.tools = toolsObj;
     if (clearsSandboxOverride && editingId) payload.sandbox = null;
     else if (sandboxObj !== undefined) payload.sandbox = sandboxObj;
     if (groupChatObj !== undefined) payload.groupChat = groupChatObj;
@@ -4011,6 +4063,91 @@ export default function Agents() {
                       </div>
                     </div>
                     <p className="text-[11px] text-gray-400">如果你要进一步配置 <span className="font-mono">tools.sandbox.tools</span>、<span className="font-mono">tools.elevated</span>、<span className="font-mono">sandbox.browser.*</span>、<span className="font-mono">docker.image/user/env</span>，请继续在 Advanced JSON 里编辑。</p>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Per-Agent 工具治理（Profile / Allow / Deny）</h4>
+                        <p className="text-xs text-gray-500 mt-1">对标官方 Agents 面板里最常用的 Tool Access 起点：先选 profile，再按需补 <span className="font-mono">tools.allow / tools.deny</span>。</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={applyHeadlessToolPreset}
+                          className="px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+                        >
+                          套用“传统无头”建议
+                        </button>
+                        <button
+                          type="button"
+                          onClick={resetToolPolicyOverrides}
+                          className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                        >
+                          清空所有工具覆盖
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                      {TOOL_POLICY_PRESETS.map(preset => {
+                        const active = form.toolProfile === preset.id;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => applyToolPolicyPreset(preset.id)}
+                            className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                              active
+                                ? 'border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-900/20'
+                                : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-300 dark:hover:border-violet-700'
+                            }`}
+                          >
+                            <div className="text-sm font-semibold text-gray-900 dark:text-white">{preset.label}</div>
+                            <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{preset.help}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-[220px,1fr] gap-4">
+                      <div>
+                        <label className="text-xs text-gray-500">工具 Profile（tools.profile）</label>
+                        <select
+                          value={form.toolProfile}
+                          onChange={e => updateForm({ toolProfile: e.target.value as AgentFormState['toolProfile'] }, 'tools')}
+                          className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        >
+                          {TOOL_POLICY_PRESETS.map(preset => (
+                            <option key={preset.label} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[11px] text-gray-400">留在 Inherit 时不会写入 per-agent <span className="font-mono">tools.profile</span> 覆盖。</p>
+                      </div>
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs text-gray-500">Allow 列表（tools.allow）</label>
+                          <textarea
+                            rows={4}
+                            value={form.toolAllow}
+                            onChange={e => updateForm({ toolAllow: e.target.value }, 'tools')}
+                            placeholder="逗号分隔，例如 group:web, group:fs"
+                            className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">Deny 列表（tools.deny）</label>
+                          <textarea
+                            rows={4}
+                            value={form.toolDeny}
+                            onChange={e => updateForm({ toolDeny: e.target.value }, 'tools')}
+                            placeholder="逗号分隔，例如 group:runtime, group:ui, group:nodes, group:automation"
+                            className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-gray-400">这三项是最常用的 per-agent 工具治理入口；更细的 <span className="font-mono">tools.sandbox.tools</span> 与 <span className="font-mono">tools.elevated</span> 继续放在 Advanced JSON。</p>
                   </div>
 
                   <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">

@@ -37,6 +37,7 @@ type ConfigTab = 'models' | 'identity' | 'general' | 'version' | 'env' | 'health
 type ConfigDiffItem = { path: string; before: string; after: string };
 type BrowserControlPreset = 'disabled' | 'managed' | 'custom';
 type BrowserProfileMode = 'openclaw' | 'chrome' | 'custom';
+type ToolProfilePreset = 'minimal' | 'coding' | 'messaging' | 'full';
 type CfgField = {
   path: string;
   label: string;
@@ -133,6 +134,39 @@ function getBrowserProfileMode(config: any): BrowserProfileMode {
   if (effective === 'openclaw' || effective === 'chrome') return effective;
   return 'custom';
 }
+
+function parseConfigListInput(value: string): string[] {
+  return value
+    .split(/[\n,，]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
+function formatConfigList(value: any): string {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean).join(', ');
+  if (typeof value === 'string') return value;
+  return '';
+}
+
+const TOOL_GOVERNANCE_PRESETS: Record<ToolProfilePreset, { label: string; help: string }> = {
+  minimal: {
+    label: 'Minimal',
+    help: '只保留最小会话能力，适合作为最保守的起点。',
+  },
+  coding: {
+    label: 'Coding',
+    help: '偏向编码/文件/运行时的常用组合，适合代码型 Agent。',
+  },
+  messaging: {
+    label: 'Messaging',
+    help: '偏向消息与渠道场景，适合聊天入口型 Agent。',
+  },
+  full: {
+    label: 'Full',
+    help: '完整工具面；只有在你明确知道后果时才建议长期使用。',
+  },
+};
 
 export default function SystemConfig() {
   const { t: i18n } = useI18n();
@@ -990,7 +1024,9 @@ export default function SystemConfig() {
             { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
             { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['same-agent', 'all-agents'] },
           ]} getVal={getVal} setVal={setVal} />
+          <SessionIsolationSection config={config} updateConfig={updateConfig} />
           <BrowserControlSection config={config} updateConfig={updateConfig} />
+          <ToolGovernanceSection config={config} updateConfig={updateConfig} />
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900 dark:text-white">Agent 间委托白名单</h3>
@@ -1004,7 +1040,7 @@ export default function SystemConfig() {
                 return '';
               })()}
               onChange={e => {
-                const list = e.target.value.split(',').map(x => x.trim()).filter(Boolean);
+                const list = parseConfigListInput(e.target.value);
                 setVal('tools.agentToAgent.allow', list);
               }}
               placeholder="例如: *, main->work, work->main"
@@ -1885,6 +1921,317 @@ function CfgSection({ title, icon: Icon, description, defaultExpanded = false, f
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SessionIsolationSection({
+  config,
+  updateConfig,
+}: {
+  config: any;
+  updateConfig: (mutate: (draft: any) => void) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const rawDmScope = typeof readConfigValue(config, 'session.dmScope') === 'string'
+    ? String(readConfigValue(config, 'session.dmScope')).trim()
+    : '';
+  const scopeCards: Array<{ id: string; label: string; help: string }> = [
+    { id: 'main', label: 'main', help: '所有私聊消息尽量复用主会话，最容易串上下文。' },
+    { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号单渠道场景。' },
+    { id: 'per-channel-peer', label: 'per-channel-peer', help: '再加上渠道维度，适合多渠道并行。' },
+    { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '把账号、渠道、peer 一起纳入隔离键，适合飞书双账号与多 Agent 路由。' },
+  ];
+
+  const setDmScope = (next: string) => {
+    updateConfig((draft: any) => {
+      if (!draft.session || typeof draft.session !== 'object' || Array.isArray(draft.session)) draft.session = {};
+      draft.session.dmScope = next;
+    });
+  };
+
+  const clearDmScope = () => {
+    updateConfig((draft: any) => {
+      if (draft.session && typeof draft.session === 'object' && !Array.isArray(draft.session)) {
+        delete draft.session.dmScope;
+      }
+    });
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <div className={`p-2 rounded-lg transition-colors ${expanded ? 'bg-sky-100 dark:bg-sky-900/30 text-sky-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+          <Users size={18} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-bold text-gray-900 dark:text-white block">私聊上下文隔离</span>
+          <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+            把 <span className="font-mono">session.dmScope</span> 可视化出来，避免飞书双账号 / 多 Agent / 多私聊之间串上下文。
+          </span>
+          <span className="text-[10px] text-gray-400 mt-1 block">
+            当前：{rawDmScope || '未显式设置（报告建议 per-account-channel-peer）'}
+          </span>
+        </div>
+        {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
+          <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 p-4 text-[12px] text-sky-800 dark:text-sky-200 space-y-2">
+            <div className="font-semibold">隔离键心智模型</div>
+            <div>研究报告里的核心结论是：会话边界不只由群准入或白名单决定，而是近似取决于 <span className="font-mono">agentId + binding + session.dmScope + peer/session key</span>。</div>
+            <div>因此，哪怕你已经设置了 <span className="font-mono">groupPolicy</span>、<span className="font-mono">dmPolicy</span> 或 <span className="font-mono">accountId</span>，如果 <span className="font-mono">dmScope</span> 仍过粗，私聊上下文仍可能串在一起。</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {scopeCards.map(card => {
+              const active = rawDmScope === card.id;
+              const recommended = card.id === 'per-account-channel-peer';
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => setDmScope(card.id)}
+                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                    active
+                      ? 'border-sky-400 bg-sky-50 dark:border-sky-700 dark:bg-sky-900/20'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-sky-300 dark:hover:border-sky-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{card.label}</span>
+                    {recommended && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300">
+                        推荐
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{card.help}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4 items-start">
+            <div>
+              <label className="text-xs text-gray-500">session.dmScope</label>
+              <select
+                value={rawDmScope}
+                onChange={e => {
+                  if (!e.target.value) {
+                    clearDmScope();
+                    return;
+                  }
+                  setDmScope(e.target.value);
+                }}
+                className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+              >
+                <option value="">未配置（建议 per-account-channel-peer）</option>
+                {scopeCards.map(card => (
+                  <option key={card.id} value={card.id}>{card.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="rounded-xl border border-amber-100 bg-amber-50/80 dark:border-amber-900/40 dark:bg-amber-950/20 px-4 py-3 text-[12px] text-amber-800 dark:text-amber-200 space-y-1.5">
+              <div className="font-medium">飞书双账号场景推荐</div>
+              <div>如果你打算用 <span className="font-mono">channels.feishu.accounts/defaultAccount</span> + Agent 路由里的 <span className="font-mono">accountId</span> 共同拆分上下文，建议把这里显式设成 <span className="font-mono">per-account-channel-peer</span>。</div>
+              <button
+                type="button"
+                onClick={clearDmScope}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md border border-amber-200 dark:border-amber-800 hover:bg-white/70 dark:hover:bg-black/10"
+              >
+                恢复为未配置
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolGovernanceSection({
+  config,
+  updateConfig,
+}: {
+  config: any;
+  updateConfig: (mutate: (draft: any) => void) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const rawProfile = String(readConfigValue(config, 'tools.profile') || '').trim();
+  const allowText = formatConfigList(readConfigValue(config, 'tools.allow'));
+  const denyText = formatConfigList(readConfigValue(config, 'tools.deny'));
+  const [allowDraft, setAllowDraft] = useState(allowText);
+  const [denyDraft, setDenyDraft] = useState(denyText);
+  const suppressAllowSyncRef = useRef(false);
+  const suppressDenySyncRef = useRef(false);
+
+  useEffect(() => {
+    if (suppressAllowSyncRef.current) {
+      suppressAllowSyncRef.current = false;
+      return;
+    }
+    setAllowDraft(allowText);
+  }, [allowText]);
+
+  useEffect(() => {
+    if (suppressDenySyncRef.current) {
+      suppressDenySyncRef.current = false;
+      return;
+    }
+    setDenyDraft(denyText);
+  }, [denyText]);
+
+  const mutateTools = (mutate: (toolsDraft: Record<string, any>) => void) => {
+    updateConfig((draft: any) => {
+      if (!draft.tools || typeof draft.tools !== 'object' || Array.isArray(draft.tools)) draft.tools = {};
+      mutate(draft.tools);
+    });
+  };
+
+  const setToolList = (key: 'allow' | 'deny', value: string) => {
+    mutateTools((toolsDraft) => {
+      const list = parseConfigListInput(value);
+      if (list.length > 0) toolsDraft[key] = list;
+      else delete toolsDraft[key];
+    });
+  };
+
+  const setToolProfile = (next: string) => {
+    mutateTools((toolsDraft) => {
+      if (next) toolsDraft.profile = next;
+      else delete toolsDraft.profile;
+    });
+  };
+
+  const applyHeadlessPreset = () => {
+    mutateTools((toolsDraft) => {
+      toolsDraft.profile = 'minimal';
+      toolsDraft.allow = ['group:web', 'group:fs'];
+      toolsDraft.deny = ['group:runtime', 'group:ui', 'group:nodes', 'group:automation'];
+    });
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <div className={`p-2 rounded-lg transition-colors ${expanded ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+          <Shield size={18} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-bold text-gray-900 dark:text-white block">工具治理</span>
+          <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+            把 <span className="font-mono">tools.profile / tools.allow / tools.deny</span> 做成可视化入口，方便把 OpenClaw 收敛到“传统无头”范围。
+          </span>
+          <span className="text-[10px] text-gray-400 mt-1 block">
+            当前 profile：{rawProfile || '未显式设置'}
+          </span>
+        </div>
+        {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
+          <div className="rounded-xl border border-violet-100 bg-violet-50/80 dark:border-violet-900/40 dark:bg-violet-950/20 p-4 text-[12px] text-violet-800 dark:text-violet-200 space-y-2">
+            <div className="font-semibold">治理边界</div>
+            <div><span className="font-mono">deny</span> 的优先级高于 <span className="font-mono">allow</span>；被拒绝的工具不会再暴露给模型。</div>
+            <div>浏览器、原生命令、重启和插件启停仍分别在本页其他区域或插件页管理；这里专门负责“模型能看到哪些工具”。</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {(Object.entries(TOOL_GOVERNANCE_PRESETS) as Array<[ToolProfilePreset, { label: string; help: string }]>).map(([presetId, meta]) => {
+              const active = rawProfile === presetId;
+              return (
+                <button
+                  key={presetId}
+                  type="button"
+                  onClick={() => setToolProfile(presetId)}
+                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                    active
+                      ? 'border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-900/20'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-300 dark:hover:border-violet-700'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">{meta.label}</div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{meta.help}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4">
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-500">tools.profile</label>
+                <select
+                  value={rawProfile}
+                  onChange={e => setToolProfile(e.target.value)}
+                  className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                >
+                  <option value="">未配置</option>
+                  {Object.entries(TOOL_GOVERNANCE_PRESETS).map(([presetId, meta]) => (
+                    <option key={presetId} value={presetId}>{meta.label}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={applyHeadlessPreset}
+                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+              >
+                一键套用“传统无头”建议
+              </button>
+              <p className="text-[11px] text-gray-400 leading-relaxed">
+                这会把 profile 设为 <span className="font-mono">minimal</span>，只补回 <span className="font-mono">group:web / group:fs</span>，并显式拒绝 runtime、UI、nodes、automation 四大扩展面。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-500">tools.allow</label>
+                  <span className="text-[10px] text-gray-400">支持逗号、中文逗号或换行分隔</span>
+                </div>
+                <textarea
+                  rows={4}
+                  value={allowDraft}
+                  onChange={e => {
+                    suppressAllowSyncRef.current = true;
+                    setAllowDraft(e.target.value);
+                    setToolList('allow', e.target.value);
+                  }}
+                  placeholder="例如: group:web, group:fs"
+                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-500">tools.deny</label>
+                  <span className="text-[10px] text-gray-400">deny 优先于 allow</span>
+                </div>
+                <textarea
+                  rows={4}
+                  value={denyDraft}
+                  onChange={e => {
+                    suppressDenySyncRef.current = true;
+                    setDenyDraft(e.target.value);
+                    setToolList('deny', e.target.value);
+                  }}
+                  placeholder="例如: group:runtime, group:ui, group:nodes, group:automation"
+                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

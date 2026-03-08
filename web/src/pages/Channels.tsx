@@ -3,9 +3,23 @@ import { api } from '../lib/api';
 import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { useI18n } from '../i18n';
 
+type ChannelFieldSection = 'default' | 'access' | 'conversation' | 'advanced';
+
+type ChannelConfigField = {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'toggle' | 'number' | 'select' | 'textarea';
+  options?: string[];
+  placeholder?: string;
+  help?: string;
+  defaultValue?: string | number | boolean;
+  section?: ChannelFieldSection;
+  rows?: number;
+};
+
 type ChannelDef = {
   id: string; label: string; description: string; type: 'builtin' | 'plugin';
-  configFields: { key: string; label: string; type: 'text' | 'password' | 'toggle' | 'number' | 'select'; options?: string[]; placeholder?: string; help?: string }[];
+  configFields: ChannelConfigField[];
   loginMethods?: ('qrcode' | 'quick' | 'password')[];
 };
 
@@ -84,6 +98,36 @@ function formatCommaList(value: any): string {
   return String(value || '').trim();
 }
 
+function parseDelimitedList(value: string): string[] {
+  return value
+    .split(/[\n,，]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
+function formatChannelFieldDefaultValue(value: string | number | boolean | undefined): string {
+  if (value === undefined) return '';
+  if (value === true) return '开启';
+  if (value === false) return '关闭';
+  return String(value);
+}
+
+const FEISHU_FIELD_SECTIONS: Record<Exclude<ChannelFieldSection, 'default'>, { title: string; description: string }> = {
+  access: {
+    title: '接入与准入策略',
+    description: '先决定站点域、群聊/私聊能否接入，再决定群白名单与 @ 触发规则。',
+  },
+  conversation: {
+    title: '对话与输出体验',
+    description: '影响话题拆分、回复位置、页脚、流式卡片和名称解析等对话体验。',
+  },
+  advanced: {
+    title: '高级兼容参数',
+    description: '补齐 gap analysis 里高频缺口字段；更深层配置仍可继续走 Raw JSON。',
+  },
+};
+
 const CHANNEL_DEFS: ChannelDef[] = [
   { id: 'qq', label: 'QQ (NapCat)', description: 'QQ个人号，NapCat OneBot11协议', type: 'plugin',
     loginMethods: ['qrcode', 'quick', 'password'],
@@ -150,19 +194,22 @@ const CHANNEL_DEFS: ChannelDef[] = [
   // Plugin channels
   { id: 'feishu', label: '飞书 / Lark', description: '飞书机器人 WebSocket (插件)', type: 'plugin',
     configFields: [
-      { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu' },
-      { key: 'requireMention', label: '群聊回复策略', type: 'select', options: ['true', 'false', 'open'], help: 'true = 仅 @ 机器人；false = 放宽触发；open = 以插件支持的开放模式处理' },
-      { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊' },
-      { key: 'groupAllowFrom', label: '群聊白名单', type: 'text', placeholder: 'oc_xxx,oc_yyy', help: '多个群 ID 请用英文逗号分隔；仅 groupPolicy=allowlist 时生效，保存时会自动转成数组' },
-      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单' },
-      { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '仅飞书官方版支持，开启后回复以流式卡片形式呈现' },
-      { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '仅飞书官方版支持，每个话题拥有独立会话并可并行' },
-      { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略' },
-      { key: 'footer.status', label: '显示状态页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略' },
-      { key: 'replyInThread', label: '话题内回复', type: 'toggle', help: '仅 ClawTeam 版支持，优先在话题内回复' },
-      { key: 'typingIndicator', label: '输入中提示', type: 'toggle', help: '仅 ClawTeam 版支持' },
-      { key: 'resolveSenderNames', label: '解析发送者名称', type: 'toggle', help: '仅 ClawTeam 版支持，自动解析飞书用户显示名' },
-      { key: 'dynamicAgentCreation', label: '动态创建 Agent', type: 'toggle', help: '仅 ClawTeam 版支持，按场景动态创建 Agent' },
+      { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu', defaultValue: 'feishu', section: 'access' },
+      { key: 'requireMention', label: '群聊回复策略', type: 'select', options: ['true', 'false', 'open'], help: 'true = 仅 @ 机器人；false = 放宽触发；open = 以插件支持的开放模式处理', defaultValue: 'true', section: 'access' },
+      { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊', defaultValue: 'open', section: 'access' },
+      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', placeholder: 'oc_xxx, oc_yyy', help: '支持英文逗号、中文逗号或换行分隔；仅 groupPolicy=allowlist 时生效，保存时会写成数组', section: 'access', rows: 3 },
+      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单', defaultValue: 'pairing', section: 'access' },
+      { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '仅飞书官方版支持，开启后回复以流式卡片形式呈现', section: 'conversation' },
+      { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '仅飞书官方版支持，每个话题拥有独立会话并可并行', section: 'conversation' },
+      { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略', section: 'conversation' },
+      { key: 'footer.status', label: '显示状态页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略', section: 'conversation' },
+      { key: 'replyInThread', label: '话题内回复', type: 'toggle', help: '仅 ClawTeam 版支持，优先在话题内回复', section: 'conversation' },
+      { key: 'typingIndicator', label: '输入中提示', type: 'toggle', help: '仅 ClawTeam 版支持', section: 'conversation' },
+      { key: 'resolveSenderNames', label: '解析发送者名称', type: 'toggle', help: '仅 ClawTeam 版支持，自动解析飞书用户显示名', section: 'conversation' },
+      { key: 'dynamicAgentCreation', label: '动态创建 Agent', type: 'toggle', help: '仅 ClawTeam 版支持，按场景动态创建 Agent', section: 'conversation' },
+      { key: 'connectionMode', label: '连接模式', type: 'text', placeholder: 'websocket', help: 'ClawTeam 版现有配置基线常见为 websocket；官方版若未使用该字段可留空', defaultValue: 'websocket', section: 'advanced' },
+      { key: 'historyLimit', label: '历史消息回放上限', type: 'number', placeholder: '300', help: 'gap analysis 中常见默认值为 300；留空表示交给插件默认', defaultValue: 300, section: 'advanced' },
+      { key: 'mediaMaxMb', label: '媒体大小上限（MB）', type: 'number', placeholder: '5', help: 'gap analysis 中常见默认值为 5；留空表示交给插件默认', defaultValue: 5, section: 'advanced' },
     ] },
   { id: 'qqbot', label: 'QQ 官方机器人', description: 'QQ开放平台官方Bot API (插件)', type: 'plugin',
     configFields: [
@@ -291,6 +338,8 @@ export default function Channels() {
   const [diagnoseResult, setDiagnoseResult] = useState<any>(null);
   const [restarting, setRestarting] = useState(false);
   const [installedPlugins, setInstalledPlugins] = useState<any[]>([]);
+  const [channelDrafts, setChannelDrafts] = useState<Record<string, any>>({});
+  const [channelFieldTextDrafts, setChannelFieldTextDrafts] = useState<Record<string, string>>({});
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
   const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
   const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
@@ -307,15 +356,17 @@ export default function Channels() {
   }, []);
 
   const updateChannelDraft = useCallback((channelId: string, mutate: (draft: any) => void) => {
-    setOcConfig((prev: any) => {
-      const next = deepClone(prev || {});
-      if (!isPlainObject(next.channels)) next.channels = {};
-      const current = isPlainObject(next.channels[channelId]) ? deepClone(next.channels[channelId]) : {};
+    setChannelDrafts((prev: Record<string, any>) => {
+      const next = { ...prev };
+      const base = isPlainObject(prev[channelId])
+        ? prev[channelId]
+        : (isPlainObject(ocConfig?.channels?.[channelId]) ? ocConfig.channels[channelId] : {});
+      const current = deepClone(base);
       mutate(current);
-      next.channels[channelId] = current;
+      next[channelId] = current;
       return next;
     });
-  }, []);
+  }, [ocConfig]);
 
   const updateFeishuDraft = useCallback((mutate: (draft: any) => void) => {
     updateChannelDraft('feishu', mutate);
@@ -378,6 +429,8 @@ export default function Channels() {
       if (!r.ok) return;
       const nextConfig = r.config || {};
       setOcConfig(nextConfig);
+      setChannelDrafts({});
+      setChannelFieldTextDrafts({});
       syncFeishuUiState(nextConfig);
     });
     api.getRequests().then(r => { if (r.ok) setRequests(r.requests || []); });
@@ -408,7 +461,12 @@ export default function Channels() {
 
   const ocChannels = ocConfig?.channels || {};
   const ocPlugins = ocConfig?.plugins?.entries || {};
-  const currentFeishuConfig = isPlainObject(ocChannels.feishu) ? ocChannels.feishu : {};
+  const getEffectiveChannelConfig = (channelId: string) => {
+    if (isPlainObject(channelDrafts[channelId])) return channelDrafts[channelId];
+    if (isPlainObject(ocChannels[channelId])) return ocChannels[channelId];
+    return {};
+  };
+  const currentFeishuConfig = getEffectiveChannelConfig('feishu');
   const currentFeishuVariant = getActiveFeishuVariant(ocConfig);
   const currentFeishuAccounts = listFeishuAccountIDs(currentFeishuConfig);
   const currentFeishuDefaultAccount = pickFeishuDefaultAccount(currentFeishuConfig);
@@ -418,13 +476,7 @@ export default function Channels() {
     : {};
   const currentFeishuGroupPolicy = String(currentFeishuConfig.groupPolicy || '').trim();
   const currentFeishuGroupAllowFrom = formatCommaList(currentFeishuConfig.groupAllowFrom);
-  const hasFeishuGroupAllowlistConflict = currentFeishuGroupPolicy !== '' && currentFeishuGroupPolicy !== 'allowlist' && !!currentFeishuGroupAllowFrom;
-
-  const toggleDraftField = (channelId: string, key: string) => {
-    updateChannelDraft(channelId, draft => {
-      setNestedValue(draft, key, !getNestedValue(draft, key));
-    });
-  };
+  const hasFeishuGroupAllowlistConflict = currentFeishuGroupPolicy !== 'allowlist' && !!currentFeishuGroupAllowFrom;
 
   const handleToggleFeishuAdvancedAccounts = (enabled: boolean) => {
     setFeishuAdvancedAccounts(enabled);
@@ -530,7 +582,7 @@ export default function Channels() {
 
   // Get the merged config for the current channel (supports nested keys like notifications.antiRecall)
   const getFieldValue = (channelId: string, key: string) => {
-    const chConf = ocChannels[channelId] || {};
+    const chConf = getEffectiveChannelConfig(channelId);
     if (channelId === 'qq') {
       if (key === 'rateLimit.wakeProbability') {
         const nested = chConf?.rateLimit?.wakeProbability;
@@ -553,6 +605,44 @@ export default function Channels() {
       return formatCommaList(chConf?.groupAllowFrom);
     }
     return key.split('.').reduce((o: any, k: string) => o?.[k], chConf);
+  };
+
+  const handleFieldDraftChange = (channelId: string, field: ChannelConfigField, rawValue: string) => {
+    if (field.type === 'textarea') {
+      const fieldDraftKey = `${channelId}:${field.key}`;
+      setChannelFieldTextDrafts(prev => {
+        const next = { ...prev };
+        if (rawValue) next[fieldDraftKey] = rawValue;
+        else delete next[fieldDraftKey];
+        return next;
+      });
+    }
+    updateChannelDraft(channelId, draft => {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
+        deleteNestedValue(draft, field.key);
+        return;
+      }
+
+      if (field.type === 'number') {
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed)) return;
+        setNestedValue(draft, field.key, parsed);
+        return;
+      }
+
+      if (channelId === 'qq' && field.key === 'rateLimit.wakeTrigger.keywords') {
+        setNestedValue(draft, field.key, parseDelimitedList(rawValue));
+        return;
+      }
+
+      if (channelId === 'feishu' && field.key === 'groupAllowFrom') {
+        setNestedValue(draft, field.key, parseDelimitedList(rawValue));
+        return;
+      }
+
+      setNestedValue(draft, field.key, rawValue);
+    });
   };
 
   const isChannelEnabled = (channelId: string) => {
@@ -585,28 +675,8 @@ export default function Channels() {
     if (!currentDef) return;
     setSaving(true); setMsg('');
     try {
-      // Collect values from form inputs
-      const formEl = document.getElementById('channel-config-form') as HTMLFormElement;
-      if (!formEl) return;
-      const formData = new FormData(formEl);
-      const chData: any = deepClone(ocChannels[currentDef.id] || {});
-      for (const f of currentDef.configFields) {
-        if (f.type === 'toggle') continue; // toggles handled separately via handleToggleField
-        const val = formData.get(f.key);
-        if (val === null) continue;
-        if (val === '') {
-          deleteNestedValue(chData, f.key);
-          continue;
-        }
-        let parsed: any = f.type === 'number' ? Number(val) : val;
-        if (currentDef.id === 'qq' && f.key === 'rateLimit.wakeTrigger.keywords') {
-          parsed = String(val)
-            .split(',')
-            .map(v => v.trim())
-            .filter(Boolean);
-        }
-        setNestedValue(chData, f.key, parsed);
-      }
+      const chData: any = deepClone(getEffectiveChannelConfig(currentDef.id));
+      const enabledState = isChannelEnabled(currentDef.id);
       if (currentDef.id === 'feishu' && String(chData.groupPolicy || '').trim() !== 'allowlist') {
         delete chData.groupAllowFrom;
       }
@@ -614,9 +684,9 @@ export default function Channels() {
       // 飞书特殊处理：保存时操作当前活跃变体的 plugin entry
       if (currentDef.id === 'feishu') {
         const entryId = getFeishuPluginEntryId(ocConfig);
-        await api.updatePlugin(entryId, { enabled: chData.enabled || false });
+        await api.updatePlugin(entryId, { enabled: enabledState });
       } else if (currentDef.type === 'plugin') {
-        await api.updatePlugin(currentDef.id, { enabled: chData.enabled || false });
+        await api.updatePlugin(currentDef.id, { enabled: enabledState });
       }
       setMsg(t.channels.saveSuccess);
       reload();
@@ -625,20 +695,10 @@ export default function Channels() {
     finally { setSaving(false); }
   };
 
-  const handleToggleField = async (channelId: string, key: string) => {
-    const chConf = JSON.parse(JSON.stringify(ocChannels[channelId] || {}));
-    const keys = key.split('.');
-    if (keys.length === 1) {
-      chConf[key] = !chConf[key];
-    } else {
-      let cur = chConf;
-      for (let i = 0; i < keys.length - 1; i++) { if (!cur[keys[i]]) cur[keys[i]] = {}; cur = cur[keys[i]]; }
-      cur[keys[keys.length - 1]] = !cur[keys[keys.length - 1]];
-    }
-    try {
-      await api.updateChannel(channelId, chConf);
-      reload();
-    } catch {}
+  const handleToggleField = (channelId: string, key: string) => {
+    updateChannelDraft(channelId, draft => {
+      setNestedValue(draft, key, !getNestedValue(draft, key));
+    });
   };
 
   // 飞书版本切换
@@ -823,6 +883,133 @@ export default function Channels() {
     const order = { enabled: 0, configured: 1, unconfigured: 2 };
     return order[getChannelStatus(a, ocConfig)] - order[getChannelStatus(b, ocConfig)];
   });
+
+  const currentFeishuAllowlistEntries = parseDelimitedList(currentFeishuGroupAllowFrom);
+
+  const renderConfigField = (channelId: string, field: ChannelConfigField) => {
+    if (channelId === 'feishu' && field.key === 'groupAllowFrom' && currentFeishuGroupPolicy !== 'allowlist' && currentFeishuAllowlistEntries.length === 0) {
+      return null;
+    }
+
+    const rawCurrentVal = getFieldValue(channelId, field.key);
+    const currentVal = channelId === 'feishu' && field.key === 'requireMention'
+      ? (rawCurrentVal === true ? 'true' : rawCurrentVal === false ? 'false' : (rawCurrentVal ?? ''))
+      : rawCurrentVal;
+    const isFullWidth =
+      field.type === 'toggle'
+      || field.type === 'textarea'
+      || field.key === 'webhookUrl'
+      || field.key === 'token'
+      || field.key === 'accessToken'
+      || field.key === 'appSecret';
+    const hasExplicitValue = currentVal !== undefined && currentVal !== null && currentVal !== '';
+    const defaultHint = !hasExplicitValue && field.defaultValue !== undefined
+      ? formatChannelFieldDefaultValue(field.defaultValue)
+      : '';
+    const groupAllowPreview = channelId === 'feishu' && field.key === 'groupAllowFrom'
+      ? parseDelimitedList(String(currentVal || ''))
+      : [];
+    const textDraftKey = `${channelId}:${field.key}`;
+    const textareaValue = field.type === 'textarea'
+      ? (channelFieldTextDrafts[textDraftKey] ?? String(currentVal ?? ''))
+      : '';
+
+    return (
+      <div key={field.key} className={isFullWidth ? 'md:col-span-2' : ''}>
+        <div className="flex items-center justify-between mb-1.5 gap-3">
+          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+            {field.label}
+          </label>
+          {field.help && <span className="text-[10px] text-gray-400 text-right">{field.help}</span>}
+        </div>
+
+        {field.type === 'toggle' ? (
+          <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
+            <button
+              type="button"
+              onClick={() => handleToggleField(channelId, field.key)}
+              className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${currentVal ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${currentVal ? 'translate-x-4' : ''}`} />
+            </button>
+            <span className={`text-xs ${currentVal ? 'text-violet-600 dark:text-violet-400 font-medium' : 'text-gray-500'}`}>
+              {currentVal ? t.channels.opened : t.channels.closed}
+            </span>
+          </div>
+        ) : field.type === 'select' ? (
+          <div className="relative">
+            <select
+              name={field.key}
+              value={currentVal ?? ''}
+              onChange={e => handleFieldDraftChange(channelId, field, e.target.value)}
+              className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none
+                ${hasExplicitValue
+                  ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100'
+                  : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
+            >
+              <option value="">{defaultHint ? `未配置（默认 ${defaultHint}）` : '未配置'}</option>
+              {field.options?.map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          </div>
+        ) : field.type === 'textarea' ? (
+          <textarea
+            name={field.key}
+            rows={field.rows || 3}
+            value={textareaValue}
+            onChange={e => handleFieldDraftChange(channelId, field, e.target.value)}
+            placeholder={field.placeholder || '未配置'}
+            className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none resize-y
+              ${hasExplicitValue
+                ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100'
+                : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
+          />
+        ) : (
+          <div className="relative">
+            <input
+              name={field.key}
+              type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+              value={currentVal ?? ''}
+              onChange={e => handleFieldDraftChange(channelId, field, e.target.value)}
+              placeholder={field.placeholder || '未配置'}
+              className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none
+                ${hasExplicitValue
+                  ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100'
+                  : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
+            />
+            {hasExplicitValue && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500">
+                <Check size={14} strokeWidth={3} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {defaultHint && (
+          <p className="mt-1 text-[11px] text-gray-400">
+            未显式设置时默认：<span className="font-mono">{defaultHint}</span>
+          </p>
+        )}
+        {channelId === 'feishu' && field.key === 'groupAllowFrom' && (
+          <div className="mt-2 space-y-2">
+            <p className="text-[11px] text-gray-500">
+              当前将保存为数组 {groupAllowPreview.length > 0 ? `（${groupAllowPreview.length} 个群 ID）` : '（当前为空）'}。
+            </p>
+            {groupAllowPreview.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {groupAllowPreview.map(groupId => (
+                  <span key={groupId} className="px-2 py-1 rounded-full bg-violet-50 dark:bg-violet-900/20 text-[11px] text-violet-700 dark:text-violet-300 border border-violet-100 dark:border-violet-800/40 font-mono">
+                    {groupId}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -1383,78 +1570,35 @@ export default function Channels() {
 
               {currentDef.id === 'feishu' && hasFeishuGroupAllowlistConflict && (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/70 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                  当前 <span className="font-mono">groupPolicy</span> 为 <span className="font-mono">{currentFeishuGroupPolicy}</span>，
+                  当前 <span className="font-mono">groupPolicy</span> 为 <span className="font-mono">{currentFeishuGroupPolicy || '未配置（默认 open）'}</span>，
                   <span className="mx-1 font-mono">groupAllowFrom</span>
                   仅在 <span className="font-mono">allowlist</span> 模式下生效。若保持当前策略并保存，白名单会被自动清理。
                 </div>
               )}
 
-              <form id="channel-config-form" className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5" onSubmit={e => { e.preventDefault(); handleSave(); }}>
-                {currentDef.configFields.map(field => {
-                  const rawCurrentVal = getFieldValue(currentDef.id, field.key);
-                  const currentVal = currentDef.id === 'feishu' && field.key === 'requireMention'
-                    ? (rawCurrentVal === true ? 'true' : rawCurrentVal === false ? 'false' : (rawCurrentVal ?? ''))
-                    : rawCurrentVal;
-                  const isFullWidth = field.type === 'toggle' || field.key === 'webhookUrl' || field.key === 'token' || field.key === 'accessToken' || field.key === 'appSecret' || field.key === 'groupAllowFrom';
-                  
-                  return (
-                    <div key={field.key} className={isFullWidth ? "md:col-span-2" : ""}>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
-                          {field.label}
-                        </label>
-                        {field.help && <span className="text-[10px] text-gray-400">{field.help}</span>}
-                      </div>
-                      
-                      {field.type === 'toggle' ? (
-                        <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
-                          <button type="button"
-                            onClick={() => currentDef.id === 'feishu' ? toggleDraftField(currentDef.id, field.key) : handleToggleField(currentDef.id, field.key)}
-                            className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${currentVal ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                            <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${currentVal ? 'translate-x-4' : ''}`} />
-                          </button>
-                          <span className={`text-xs ${currentVal ? 'text-violet-600 dark:text-violet-400 font-medium' : 'text-gray-500'}`}>
-                            {currentVal ? t.channels.opened : t.channels.closed}
-                          </span>
+              <form
+                id="channel-config-form"
+                className={currentDef.id === 'feishu' ? 'space-y-4' : 'grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5'}
+                onSubmit={e => { e.preventDefault(); handleSave(); }}
+              >
+                {currentDef.id === 'feishu'
+                  ? (Object.entries(FEISHU_FIELD_SECTIONS) as Array<[Exclude<ChannelFieldSection, 'default'>, { title: string; description: string }]>).map(([sectionKey, sectionMeta]) => {
+                      const fields = currentDef.configFields.filter(field => field.section === sectionKey);
+                      const visibleFields = fields.filter(field => !(field.key === 'groupAllowFrom' && currentFeishuGroupPolicy !== 'allowlist' && currentFeishuAllowlistEntries.length === 0));
+                      if (visibleFields.length === 0) return null;
+                      return (
+                        <div key={sectionKey} className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                          <div>
+                            <h4 className="text-sm font-semibold text-gray-900 dark:text-white">{sectionMeta.title}</h4>
+                            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{sectionMeta.description}</p>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+                            {visibleFields.map(field => renderConfigField(currentDef.id, field))}
+                          </div>
                         </div>
-                      ) : field.type === 'select' ? (
-                        <div className="relative">
-                          <select
-                            name={field.key}
-                            defaultValue={currentVal ?? ''}
-                            className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none
-                              ${(currentVal !== undefined && currentVal !== null && currentVal !== '')
-                                ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100'
-                                : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
-                          >
-                            <option value="">未配置</option>
-                            {field.options?.map(opt => (
-                              <option key={opt} value={opt}>{opt}</option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
-                        <div className="relative">
-                          <input
-                            name={field.key}
-                            type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
-                            defaultValue={currentVal ?? ''}
-                            placeholder={field.placeholder || '未配置'}
-                            className={`w-full px-3.5 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 transition-all focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/30 focus:border-violet-500 outline-none
-                              ${(currentVal !== undefined && currentVal !== null && currentVal !== '') 
-                                ? 'border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100' 
-                                : 'border-gray-200 dark:border-gray-800 text-gray-400'}`}
-                          />
-                          {(currentVal !== undefined && currentVal !== null && currentVal !== '') && (
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500">
-                              <Check size={14} strokeWidth={3} />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                      );
+                    })
+                  : currentDef.configFields.map(field => renderConfigField(currentDef.id, field))}
               </form>
 
               {currentDef.configFields.length === 0 && (

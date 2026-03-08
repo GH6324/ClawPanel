@@ -214,6 +214,10 @@ Authorization: Bearer <token>
 }
 ```
 
+> v5.1.0+：保存时会校验：
+> - `agent.contextTokens` 必须为正整数
+> - `agent.compaction.maxHistoryShare` 必须位于 `0..1`
+
 ### PUT `/api/openclaw/agents/:id`
 更新指定 Agent（`id` 不可修改）。
 
@@ -266,6 +270,8 @@ Authorization: Bearer <token>
 
 > v5.1.0+：预览命中遵循“更具体规则优先”而非仅配置顺序。优先级：
 > `sender > peer > parentPeer > guildId+roles > guildId > teamId > accountId > accountId:* > channel > default`。
+>
+> v5.1.0+：当 `meta.channel` 已知且 `meta.accountId` 省略时，预览会按该渠道的默认账号语义处理；对于飞书这类多账号渠道，这与真实路由行为保持一致。
 
 ### GET `/api/openclaw/models`
 获取模型配置。
