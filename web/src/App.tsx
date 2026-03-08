@@ -38,15 +38,15 @@ export default function App() {
       <Route element={<Layout onLogout={auth.logout} napcatStatus={ws.napcatStatus} wechatStatus={ws.wechatStatus} openclawStatus={ws.openclawStatus} processStatus={ws.processStatus} wsMessages={ws.wsMessages} />}>
         <Route path="/" element={<Dashboard ws={ws} />} />
         <Route path="/logs" element={<ActivityLog ws={ws} />} />
-        <Route path="/channels" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Channels /></OpenClawRequired>} />
-        <Route path="/skills" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Skills /></OpenClawRequired>} />
-        <Route path="/plugins" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Plugins /></OpenClawRequired>} />
+        <Route path="/channels" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Channels /></OpenClawRequired>} />
+        <Route path="/skills" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Skills /></OpenClawRequired>} />
+        <Route path="/plugins" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Plugins /></OpenClawRequired>} />
         {enableAgents && (
-          <Route path="/agents" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Agents /></OpenClawRequired>} />
+          <Route path="/agents" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Agents /></OpenClawRequired>} />
         )}
-        <Route path="/workflows" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Workflows /></OpenClawRequired>} />
-        <Route path="/cron" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><CronJobs /></OpenClawRequired>} />
-        <Route path="/sessions" element={<OpenClawRequired configured={!!ws.openclawStatus?.configured}><Sessions /></OpenClawRequired>} />
+        <Route path="/workflows" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Workflows /></OpenClawRequired>} />
+        <Route path="/cron" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><CronJobs /></OpenClawRequired>} />
+        <Route path="/sessions" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Sessions /></OpenClawRequired>} />
         <Route path="/config" element={<SystemConfig />} />
         <Route path="/workspace" element={<Workspace />} />
       </Route>

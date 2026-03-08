@@ -3,15 +3,19 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ensureOpenClawInstallPrerequisites, getOpenClawInstallPrerequisiteStatus } from '../lib/openclawPrereq';
+import { resolveOpenClawRuntime } from '../lib/openclawRuntime';
 
 interface Props {
-  configured: boolean;
+  openclawStatus?: any;
+  processStatus?: any;
   children: React.ReactNode;
 }
 
-export default function OpenClawRequired({ configured, children }: Props) {
+export default function OpenClawRequired({ openclawStatus, processStatus, children }: Props) {
   const { pathname } = useLocation();
   const dismissKey = `openclaw-required-dismissed:${pathname}`;
+  const configured = !!openclawStatus?.configured;
+  const runtime = resolveOpenClawRuntime(openclawStatus, processStatus);
   const [installing, setInstalling] = useState(false);
   const [dismissed, setDismissed] = useState(() => sessionStorage.getItem(dismissKey) === '1');
   const [installBlocked, setInstallBlocked] = useState(false);
@@ -51,7 +55,38 @@ export default function OpenClawRequired({ configured, children }: Props) {
     return () => { active = false; };
   }, []);
 
-  if (configured) return <>{children}</>;
+  if (configured && runtime.healthy) return <>{children}</>;
+
+  if (configured && !runtime.healthy) {
+    return (
+      <div className="space-y-4">
+        <div className={`rounded-2xl border px-4 py-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between ${runtime.state === 'offline' ? 'border-red-200/80 dark:border-red-900/40 bg-red-50/90 dark:bg-red-950/20' : 'border-amber-200/80 dark:border-amber-900/40 bg-amber-50/90 dark:bg-amber-950/20'}`}>
+          <div>
+            <div className={`text-sm font-semibold ${runtime.state === 'offline' ? 'text-red-900 dark:text-red-100' : 'text-amber-900 dark:text-amber-100'}`}>{runtime.title}</div>
+            <p className={`text-xs mt-1 leading-5 ${runtime.state === 'offline' ? 'text-red-700 dark:text-red-200/90' : 'text-amber-700 dark:text-amber-200/90'}`}>{runtime.message}</p>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <button
+              onClick={async () => {
+                try {
+                  const r = await api.restartGateway();
+                  if (!r?.ok) window.alert(r?.error || '重启网关失败');
+                } catch {
+                  window.alert('重启网关失败');
+                }
+              }}
+              className="px-4 py-2 text-xs font-medium rounded-xl border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors"
+            >
+              重启网关
+            </button>
+          </div>
+        </div>
+        <div className={`${runtime.state === 'offline' ? 'opacity-70' : ''}`}>
+          {children}
+        </div>
+      </div>
+    );
+  }
 
   const handleInstall = async () => {
     setInstalling(true);

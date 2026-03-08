@@ -217,14 +217,14 @@ func resolvePluginInstallStrategy(regPlugin *RegistryPlugin, source string) plug
 	if regPlugin == nil {
 		return pluginInstallStrategy{}
 	}
+	if regPlugin.NpmPackage != "" {
+		return pluginInstallStrategy{kind: "npm", target: regPlugin.NpmPackage}
+	}
 	if regPlugin.DownloadURL != "" {
 		return pluginInstallStrategy{kind: "download", target: regPlugin.DownloadURL}
 	}
 	if regPlugin.GitURL != "" {
 		return pluginInstallStrategy{kind: "download", target: regPlugin.GitURL}
-	}
-	if regPlugin.NpmPackage != "" {
-		return pluginInstallStrategy{kind: "npm", target: regPlugin.NpmPackage}
 	}
 	return pluginInstallStrategy{}
 }

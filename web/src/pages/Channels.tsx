@@ -316,10 +316,13 @@ const CHANNEL_DEFS: ChannelDef[] = [
     ] },
   { id: 'whatsapp', label: 'WhatsApp', description: 'Baileys QR扫码配对', type: 'builtin', loginMethods: ['qrcode'],
     configFields: [{ key: 'dmPolicy', label: 'DM策略', type: 'select', options: ['pairing','open','allowlist'] }] },
-  { id: 'telegram', label: 'Telegram', description: 'Bot API via grammŸ，支持群组', type: 'builtin',
+  { id: 'telegram', label: 'Telegram', description: 'Telegram Bot 通道插件', type: 'plugin',
     configFields: [
-      { key: 'token', label: 'Bot Token', type: 'password', placeholder: '123456:ABC-DEF...' },
-      { key: 'webhookUrl', label: 'Webhook URL', type: 'text' },
+      { key: 'botToken', label: 'Bot Token', type: 'password', placeholder: '123456:ABC-DEF...', help: '从 @BotFather 获取的 Telegram Bot Token' },
+      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 首次私聊需配对批准；open = 所有私聊直接可用；allowlist = 仅白名单', defaultValue: 'pairing' },
+      { key: 'allowFrom', label: '私聊白名单', type: 'textarea', rows: 3, placeholder: '123456789, 987654321', help: '仅 dmPolicy=allowlist 时生效；支持英文逗号、中文逗号或换行分隔' },
+      { key: 'groupPolicy', label: '群聊准入策略', type: 'select', options: ['allowlist', 'open'], help: 'allowlist = 仅允许白名单中的发送者；open = 群内任何人都可触发（通常仍需提及）', defaultValue: 'allowlist' },
+      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', rows: 3, placeholder: '123456789, 987654321', help: '仅 groupPolicy=allowlist 时生效；支持英文逗号、中文逗号或换行分隔' },
     ] },
   { id: 'discord', label: 'Discord', description: 'Discord Bot API + Gateway', type: 'builtin',
     configFields: [
@@ -429,7 +432,7 @@ const CHANNEL_DEFS: ChannelDef[] = [
 ];
 
 const CHANNEL_REQUIRED_FIELDS: Record<string, string[]> = {
-  telegram: ['token'],
+  telegram: ['botToken'],
   discord: ['token', 'applicationId'],
   irc: ['server', 'nick', 'channels'],
   slack: ['appToken', 'botToken'],
@@ -656,7 +659,7 @@ export default function Channels() {
   const validateChannelBeforeEnable = (channelId: string) => {
     const requiredFields = CHANNEL_REQUIRED_FIELDS[channelId] || [];
     if (!requiredFields.length) return '';
-    const cfg = ocConfig?.channels?.[channelId] || {};
+    const cfg = getEffectiveChannelConfig(channelId);
     const missingLabels = requiredFields
       .filter(key => {
         const value = key.split('.').reduce((obj: any, part: string) => obj?.[part], cfg);
@@ -2176,6 +2179,15 @@ export default function Channels() {
                   当前 <span className="font-mono">groupPolicy</span> 为 <span className="font-mono">{currentFeishuGroupPolicy || '未配置（默认 open）'}</span>，
                   <span className="mx-1 font-mono">groupAllowFrom</span>
                   仅在 <span className="font-mono">allowlist</span> 模式下生效。若保持当前策略并保存，白名单会被自动清理。
+                </div>
+              )}
+
+              {currentDef.id === 'telegram' && String(getEffectiveChannelConfig('telegram')?.dmPolicy || 'pairing') === 'pairing' && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed space-y-1.5">
+                  <div className="font-semibold text-amber-900 dark:text-amber-100">Telegram 当前处于配对模式</div>
+                  <div>首次私聊机器人时，OpenClaw 会返回 pairing code；当前面板还没有 Telegram 配对审批页。</div>
+                  <div>可在服务器执行 <span className="font-mono">openclaw pairing list telegram</span> 查看待审批请求，再执行 <span className="font-mono">openclaw pairing approve telegram &lt;code&gt;</span> 完成授权。</div>
+                  <div>如果你不想走配对流程，可把“私聊准入策略”改成 <span className="font-mono">open</span>。</div>
                 </div>
               )}
 

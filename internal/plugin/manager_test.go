@@ -6,7 +6,7 @@ import (
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
 )
 
-func TestResolvePluginInstallStrategyPrefersRegistryGitOverNpm(t *testing.T) {
+func TestResolvePluginInstallStrategyPrefersRegistryNpmOverGit(t *testing.T) {
 	t.Parallel()
 
 	strategy := resolvePluginInstallStrategy(&RegistryPlugin{
@@ -14,8 +14,8 @@ func TestResolvePluginInstallStrategyPrefersRegistryGitOverNpm(t *testing.T) {
 		NpmPackage: "@openclaw/wecom",
 	}, "")
 
-	if strategy.kind != "download" || strategy.target != "https://github.com/example/repo.git" {
-		t.Fatalf("expected git/download strategy, got %#v", strategy)
+	if strategy.kind != "npm" || strategy.target != "@openclaw/wecom" {
+		t.Fatalf("expected npm strategy, got %#v", strategy)
 	}
 }
 

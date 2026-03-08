@@ -3,15 +3,20 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+	"unsafe"
 
 	"github.com/gin-gonic/gin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
+	"github.com/zhaoxinyi02/ClawPanel/internal/process"
 )
 
 func TestSaveOpenClawConfigPreservesCriticalFields(t *testing.T) {
@@ -891,5 +896,50 @@ func TestSaveChannelQQReturnsMessageWithoutProcessManager(t *testing.T) {
 	}
 	if ok, _ := resp["ok"].(bool); !ok {
 		t.Fatalf("expected ok response, got %#v", resp)
+	}
+}
+
+func TestSaveChannelRequestsGatewayRestartForTelegramWhenRunning(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	procMgr := process.NewManager(cfg)
+	procMgrStatus := process.Status{Running: true, PID: 1234, StartedAt: time.Now()}
+
+	v := reflect.ValueOf(procMgr).Elem().FieldByName("status")
+	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(procMgrStatus))
+
+	r := gin.New()
+	r.PUT("/openclaw/channels/:id", SaveChannel(cfg, procMgr))
+
+	body := []byte(`{"enabled":true,"token":"123456:abc","dmPolicy":"open"}`)
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/channels/telegram", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if requested, _ := resp["restartRequested"].(bool); !requested {
+		t.Fatalf("expected restartRequested=true, got %#v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "restart-gateway-signal.json")); err != nil {
+		t.Fatalf("expected restart signal file to be written: %v", err)
+	}
+	if saved, err := cfg.ReadOpenClawJSON(); err != nil {
+		t.Fatalf("read openclaw config: %v", err)
+	} else if channels, _ := saved["channels"].(map[string]interface{}); channels == nil || channels["telegram"] == nil {
+		t.Fatalf("expected telegram config to be saved, got %#v", saved)
+	} else if telegram, _ := channels["telegram"].(map[string]interface{}); strings.TrimSpace(fmt.Sprint(telegram["botToken"])) != "123456:abc" {
+		t.Fatalf("expected telegram botToken to be normalized, got %#v", telegram)
+	} else if allowFrom, _ := channels["telegram"].(map[string]interface{})["allowFrom"].([]interface{}); len(allowFrom) == 0 || fmt.Sprint(allowFrom[len(allowFrom)-1]) != "*" {
+		t.Fatalf("expected telegram allowFrom wildcard, got %#v", channels["telegram"])
 	}
 }

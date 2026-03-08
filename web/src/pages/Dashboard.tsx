@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { LogEntry } from '../hooks/useWebSocket';
 import { useI18n } from '../i18n';
+import { resolveOpenClawRuntime } from '../lib/openclawRuntime';
 
 interface DashboardProps {
   ws: {
@@ -45,6 +46,14 @@ export default function Dashboard({ ws }: DashboardProps) {
   const gateway = status?.gateway || {};
   const proc = status?.process || {};
   const adm = status?.admin || {};
+  const runtime = resolveOpenClawRuntime(oc, proc, gateway);
+  const runtimeTone = !oc.configured
+    ? 'amber'
+    : runtime.healthy
+      ? 'emerald'
+      : runtime.state === 'offline'
+        ? 'red'
+        : 'amber';
 
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const filteredLogs = ws.logEntries.filter(e => !isNoiseEvent(e));
@@ -133,14 +142,28 @@ export default function Dashboard({ ws }: DashboardProps) {
           <h2 className={`font-bold tracking-tight ${modern ? 'text-2xl text-slate-900 dark:text-white' : 'text-xl text-gray-900 dark:text-white'}`}>{t.dashboard.title}</h2>
           <p className={`text-sm mt-1 ${modern ? 'text-slate-500' : 'text-gray-500'}`}>{t.dashboard.subtitle}</p>
         </div>
-        <div className={`flex items-center gap-2 ${modern ? 'px-4 py-2 rounded-2xl border border-emerald-200/60 dark:border-emerald-800/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.72),rgba(236,253,245,0.78))] dark:bg-[linear-gradient(135deg,rgba(6,78,59,0.26),rgba(15,23,42,0.78))] backdrop-blur-xl shadow-[0_14px_30px_rgba(15,23,42,0.05)]' : ''}`}>
+        <div className={`flex items-center gap-2 ${modern ? `px-4 py-2 rounded-2xl border ${runtimeTone === 'emerald' ? 'border-emerald-200/60 dark:border-emerald-800/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.72),rgba(236,253,245,0.78))] dark:bg-[linear-gradient(135deg,rgba(6,78,59,0.26),rgba(15,23,42,0.78))]' : runtimeTone === 'red' ? 'border-red-200/70 dark:border-red-800/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.72),rgba(254,242,242,0.85))] dark:bg-[linear-gradient(135deg,rgba(127,29,29,0.24),rgba(15,23,42,0.82))]' : 'border-amber-200/70 dark:border-amber-800/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,251,235,0.86))] dark:bg-[linear-gradient(135deg,rgba(120,53,15,0.24),rgba(15,23,42,0.82))]'} backdrop-blur-xl shadow-[0_14px_30px_rgba(15,23,42,0.05)]` : ''}`}>
           <span className="flex h-2.5 w-2.5 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${runtimeTone === 'emerald' ? 'bg-emerald-400' : runtimeTone === 'red' ? 'bg-red-400' : 'bg-amber-400'}`}></span>
+            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${runtimeTone === 'emerald' ? 'bg-emerald-500' : runtimeTone === 'red' ? 'bg-red-500' : 'bg-amber-500'}`}></span>
           </span>
-          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{t.dashboard.systemNormal}</span>
+          <span className={`text-xs font-medium ${runtimeTone === 'emerald' ? 'text-emerald-600 dark:text-emerald-400' : runtimeTone === 'red' ? 'text-red-600 dark:text-red-300' : 'text-amber-700 dark:text-amber-300'}`}>{runtime.healthy ? t.dashboard.systemNormal : runtime.title}</span>
         </div>
       </div>
+
+      {oc.configured && !runtime.healthy && (
+        <div className={`shrink-0 rounded-[28px] border p-5 backdrop-blur-xl shadow-[0_18px_40px_rgba(15,23,42,0.06)] ${runtime.state === 'offline' ? 'border-red-200/80 dark:border-red-900/40 bg-[linear-gradient(135deg,rgba(254,242,242,0.96),rgba(255,237,213,0.88))] dark:bg-[linear-gradient(135deg,rgba(127,29,29,0.24),rgba(120,53,15,0.18))]' : 'border-amber-200/80 dark:border-amber-900/40 bg-[linear-gradient(135deg,rgba(255,251,235,0.95),rgba(254,249,195,0.82))] dark:bg-[linear-gradient(135deg,rgba(120,53,15,0.22),rgba(113,63,18,0.16))]'}`}>
+          <div className="flex items-start gap-3">
+            <div className={`mt-0.5 rounded-2xl p-2 ${runtime.state === 'offline' ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
+              <AlertTriangle size={18} />
+            </div>
+            <div className="min-w-0">
+              <h3 className={`text-sm font-bold ${runtime.state === 'offline' ? 'text-red-900 dark:text-red-100' : 'text-amber-900 dark:text-amber-100'}`}>{runtime.title}</h3>
+              <p className={`mt-1 text-sm leading-6 ${runtime.state === 'offline' ? 'text-red-700 dark:text-red-200/90' : 'text-amber-800 dark:text-amber-200/90'}`}>{runtime.message}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status cards */}
       <div className={`grid ${modern ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6' : 'grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'} gap-4 shrink-0`}>

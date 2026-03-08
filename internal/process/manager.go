@@ -467,6 +467,19 @@ func (m *Manager) waitForExit() {
 				return
 			}
 		}
+		if wasRunning && exitCode != 0 && m.gatewayListening(true) {
+			log.Printf("[ProcessMgr] OpenClaw 进程退出后网关仍可访问，视为已由现存守护进程/外部实例接管")
+			m.mu.Lock()
+			m.status.Running = true
+			m.status.ExitCode = 0
+			m.status.PID = 0
+			m.status.Daemonized = false
+			m.status.ManagedExternally = true
+			m.cmd = nil
+			m.daemonized = false
+			m.mu.Unlock()
+			return
+		}
 		if wasRunning && exitCode != 0 {
 			log.Println("[ProcessMgr] 检测到 OpenClaw 异常退出，3秒后自动重启...")
 			time.Sleep(2 * time.Second)

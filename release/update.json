@@ -1,20 +1,20 @@
 {
-  "latest_version": "5.2.5",
-  "release_time": "2026-03-08T22:19:00+08:00",
-  "release_note": "## v5.2.5 - Windows 环境检测与前置依赖可用性增强\n\n### Windows 环境检测\n- 扩展 Windows 常见运行时路径探测，补充 Node.js、npm、Git、Python、Chocolatey、Scoop、pyenv-win、ClawPanel npm-global 等目录\n- Python 检测从仅识别 python3 改为依次尝试：python3、python、py\n- 解决先安装面板、后手动安装 Node.js/Git/Python，面板里仍显示未安装的高频误判问题\n\n### OpenClaw 安装前校验\n- Windows / macOS 安装 OpenClaw 前，除了检查 node 与 git，还会同步确认 npm 可用\n- 避免出现检测到 Node.js，但 npm 实际不可用，安装仍然半途失败的情况",
+  "latest_version": "5.2.6",
+  "release_time": "2026-03-09T00:03:00+08:00",
+  "release_note": "## v5.2.6 - Telegram 通道可用性修复与运行状态告警增强\n\n### Telegram 通道\n- Telegram 配置改为按 OpenClaw schema 正确写入 channels.telegram.botToken，避免把 token 写进错误字段后导致网关启动异常\n- Telegram 保存配置后会自动请求重载网关，避免保存成功后仍继续使用旧配置\n- 当 dmPolicy=open 或 groupPolicy=open 时，自动补齐 allowFrom=[\"*\"] / groupAllowFrom=[\"*\"]，确保用户切到开放模式后通道可立即正常使用\n\n### 运行状态提示\n- 仪表盘和全局布局改为显示真实 OpenClaw / 网关健康状态，不再固定显示系统运行正常\n- 运行依赖页面在 OpenClaw / 网关异常时会展示醒目提示，降低误操作风险",
   "download_urls": {
-    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-linux-amd64",
-    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-linux-arm64",
-    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-darwin-amd64",
-    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-darwin-arm64",
-    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.5-windows-amd64.exe"
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-linux-amd64",
+    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-linux-arm64",
+    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-darwin-amd64",
+    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-darwin-arm64",
+    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-windows-amd64.exe"
   },
   "sha256": {
-    "linux_amd64": "159cfd730fd4e058550b79aa528bfdb643cb673518ccfeaf1294fc70785e8c77",
-    "linux_arm64": "c879afda9dd0a52ae3c2b7642d117b38724fca602605b9d5cf85b20844380033",
-    "darwin_amd64": "a81df79fcc7ec7b9f1745b4d6f7f9c8d80216c70605e213b9318dca9f3b6baaf",
-    "darwin_arm64": "e797e8d0ba13640aa0e74e3bb4e4eb06ca940ea185b590aafbd84d028707d9b9",
-    "windows_amd64": "0d767625e48a433f94ee17d584ba9139e6ee67284ae40d6886b714e755b31987"
+    "linux_amd64": "128770f72baf0ddb43bdf09c198df1a959d5b0cacadc8ec75a4a2f34ee86049c",
+    "linux_arm64": "8088a747bf0403eb4ec06ffa8298ca0ff43619c0594ed6477c2b0c703db47dd2",
+    "darwin_amd64": "0da09bb7e88c88b5632befe34c7a464c2ed13e75b022de351d4b56678a7acf67",
+    "darwin_arm64": "ad9ca48995dc0be3d2971e232fb485cfd9f7833e378f284b1b62af8532ab79e3",
+    "windows_amd64": "5e6812b5cc58b516c5408293a5f08c816e8b7461848ad4adb6c0f6f376b6a8fb"
   },
   "major_change": false,
   "change_warning": ""

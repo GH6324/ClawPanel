@@ -9,6 +9,7 @@ import { useI18n } from '../i18n';
 import AIAssistant from './AIAssistant';
 import MessageCenter, { TaskInfo } from './MessageCenter';
 import { api } from '../lib/api';
+import { resolveOpenClawRuntime } from '../lib/openclawRuntime';
 
 interface Props { onLogout: () => void; napcatStatus: any; wechatStatus?: any; openclawStatus?: any; processStatus?: any; wsMessages?: any[]; }
 
@@ -198,6 +199,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
   // Build channel list from enabledChannels returned by /api/status
   const enabledChannels: { id: string; label: string }[] = openclawStatus?.enabledChannels || [];
   const connectedChannels: { label: string; detail: string; connected: boolean }[] = [];
+  const runtime = resolveOpenClawRuntime(openclawStatus, processStatus);
   const openClawRestartHint = processStatus?.managedExternally
     ? (locale === 'zh-CN' ? '当前 OpenClaw 由外部进程管理，请改用“网关”按钮或在外部环境中重启。' : 'OpenClaw is managed externally. Use “Gateway” or restart it outside the panel.')
     : processStatus?.daemonized
@@ -411,6 +413,21 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
             )}
           </div>
         </header>
+        {openclawStatus?.configured && !runtime.healthy && (
+          <div className="px-3 pt-3 sm:px-4 lg:px-6 xl:px-7">
+            <div className={`rounded-[24px] border px-4 py-3 shadow-[0_16px_34px_rgba(15,23,42,0.06)] backdrop-blur-xl ${runtime.state === 'offline' ? 'border-red-200/80 dark:border-red-900/40 bg-[linear-gradient(135deg,rgba(254,242,242,0.96),rgba(255,237,213,0.88))] dark:bg-[linear-gradient(135deg,rgba(127,29,29,0.24),rgba(120,53,15,0.18))]' : 'border-amber-200/80 dark:border-amber-900/40 bg-[linear-gradient(135deg,rgba(255,251,235,0.96),rgba(254,249,195,0.86))] dark:bg-[linear-gradient(135deg,rgba(120,53,15,0.22),rgba(113,63,18,0.16))]'}`}>
+              <div className="flex items-start gap-3">
+                <div className={`mt-0.5 rounded-2xl p-2 ${runtime.state === 'offline' ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
+                  <Bell size={16} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className={`text-sm font-semibold ${runtime.state === 'offline' ? 'text-red-900 dark:text-red-100' : 'text-amber-900 dark:text-amber-100'}`}>{runtime.title}</div>
+                  <div className={`mt-1 text-xs leading-5 ${runtime.state === 'offline' ? 'text-red-700 dark:text-red-200/90' : 'text-amber-800 dark:text-amber-200/90'}`}>{runtime.message}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto ui-modern-scrollbar p-3 pb-24 sm:p-4 sm:pb-28 lg:p-6 lg:pb-6 xl:p-7"><Outlet context={{ uiMode: 'modern' }} /></div>
       </main>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(239,246,255,0.84))] px-3 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-2xl dark:border-blue-400/15 dark:bg-[linear-gradient(180deg,rgba(7,17,31,0.96),rgba(11,26,46,0.92))] lg:hidden">

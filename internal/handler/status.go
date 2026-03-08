@@ -116,6 +116,7 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 		// 进程状态
 		procStatus := procMgr.GetStatus()
 		gatewayRunning := procMgr.GatewayListening()
+		runtimeHealth := buildOpenClawRuntimeHealth(cfg.OpenClawInstalled(), procStatus, gatewayRunning)
 
 		// 内存使用
 		var memStats runtime.MemStats
@@ -178,6 +179,7 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 				"configured":      cfg.OpenClawInstalled(),
 				"currentModel":    currentModel,
 				"enabledChannels": channels,
+				"runtime":         runtimeHealth,
 			},
 			"gateway": gin.H{
 				"running": gatewayRunning,
@@ -192,6 +194,80 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 				"goroutines": runtime.NumGoroutine(),
 			},
 		})
+	}
+}
+
+func buildOpenClawRuntimeHealth(configured bool, procStatus process.Status, gatewayRunning bool) gin.H {
+	if !configured {
+		return gin.H{
+			"state":          "not_configured",
+			"healthy":        false,
+			"degraded":       false,
+			"processRunning": procStatus.Running,
+			"gatewayRunning": gatewayRunning,
+			"title":          "OpenClaw 尚未安装或配置",
+			"message":        "当前页面可浏览，但模型、通道和网关相关能力尚未就绪。",
+		}
+	}
+
+	if procStatus.Running && gatewayRunning {
+		state := "healthy"
+		title := "OpenClaw 运行正常"
+		message := "OpenClaw 与网关均在线，消息处理与配置写入可正常进行。"
+		if procStatus.ManagedExternally {
+			state = "degraded"
+			title = "OpenClaw 已由外部实例接管"
+			message = "网关当前可用，但 ClawPanel 未直接托管该运行实例；停止或重启时请优先使用网关按钮或外部环境。"
+		}
+		return gin.H{
+			"state":          state,
+			"healthy":        state == "healthy",
+			"degraded":       state != "healthy",
+			"processRunning": procStatus.Running,
+			"gatewayRunning": gatewayRunning,
+			"title":          title,
+			"message":        message,
+		}
+	}
+
+	if gatewayRunning {
+		title := "网关在线，但运行状态异常"
+		message := "OpenClaw 网关仍可访问，但面板未确认到稳定主进程；运行相关页面可能出现状态不同步。"
+		if procStatus.ManagedExternally {
+			title = "网关已由外部实例接管"
+			message = "网关仍在线，但当前实例不受 ClawPanel 直接管理；如需重启，请在外部环境处理或使用网关按钮。"
+		}
+		return gin.H{
+			"state":          "degraded",
+			"healthy":        false,
+			"degraded":       true,
+			"processRunning": procStatus.Running,
+			"gatewayRunning": gatewayRunning,
+			"title":          title,
+			"message":        message,
+		}
+	}
+
+	if procStatus.Running {
+		return gin.H{
+			"state":          "degraded",
+			"healthy":        false,
+			"degraded":       true,
+			"processRunning": procStatus.Running,
+			"gatewayRunning": gatewayRunning,
+			"title":          "OpenClaw 进程存在，但网关离线",
+			"message":        "ClawPanel 检测到 OpenClaw 进程仍在运行，但消息网关当前不可达；通道收发和 AI 请求可能失败。",
+		}
+	}
+
+	return gin.H{
+		"state":          "offline",
+		"healthy":        false,
+		"degraded":       true,
+		"processRunning": false,
+		"gatewayRunning": false,
+		"title":          "OpenClaw 与网关均离线",
+		"message":        "当前运行环境异常，依赖 OpenClaw 的页面可能无法保存配置、安装插件或处理消息。",
 	}
 }
 

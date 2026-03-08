@@ -286,6 +286,9 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 		if id == "qq" {
 			body = normalizeQQChannelConfig(body)
 		}
+		if id == "telegram" {
+			body = normalizeTelegramChannelConfig(body)
+		}
 		if id == "feishu" {
 			body = normalizeFeishuChannelConfig(body)
 		}
@@ -311,6 +314,12 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 			} else {
 				resp["message"] = "QQ 配置已保存；OpenClaw 网关下次启动时生效"
 			}
+		} else if procMgr != nil && procMgr.GetStatus().Running {
+			writeRestartSignal(cfg, id+" channel config updated")
+			resp["message"] = "通道配置已保存，并已发送网关重启请求使配置生效"
+			resp["restartRequested"] = true
+		} else {
+			resp["message"] = "通道配置已保存；OpenClaw 网关下次启动时生效"
 		}
 		c.JSON(http.StatusOK, resp)
 	}
@@ -366,6 +375,86 @@ func normalizeQQChannelConfig(body map[string]interface{}) map[string]interface{
 	}
 
 	return body
+}
+
+func normalizeTelegramChannelConfig(body map[string]interface{}) map[string]interface{} {
+	if body == nil {
+		return map[string]interface{}{}
+	}
+	if raw, ok := body["token"]; ok {
+		if token := strings.TrimSpace(fmt.Sprint(raw)); token != "" {
+			body["botToken"] = token
+		}
+		delete(body, "token")
+	}
+	if strings.TrimSpace(fmt.Sprint(body["botToken"])) != "" {
+		if strings.TrimSpace(fmt.Sprint(body["dmPolicy"])) == "" {
+			body["dmPolicy"] = "open"
+		}
+		if strings.TrimSpace(fmt.Sprint(body["groupPolicy"])) == "" {
+			body["groupPolicy"] = "open"
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(fmt.Sprint(body["dmPolicy"])), "open") {
+		body["allowFrom"] = ensureWildcardAllowList(body["allowFrom"])
+	}
+	if strings.EqualFold(strings.TrimSpace(fmt.Sprint(body["groupPolicy"])), "open") {
+		body["groupAllowFrom"] = ensureWildcardAllowList(body["groupAllowFrom"])
+	}
+	return body
+}
+
+func ensureWildcardAllowList(raw interface{}) []interface{} {
+	entries := make([]interface{}, 0)
+	seen := map[string]bool{}
+	appendEntry := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		entries = append(entries, v)
+	}
+	addRaw := func(val interface{}) {
+		s := strings.TrimSpace(fmt.Sprint(val))
+		if s != "" {
+			appendEntry(s)
+		}
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		for _, item := range v {
+			addRaw(item)
+		}
+	case []string:
+		for _, item := range v {
+			appendEntry(item)
+		}
+	case string:
+		for _, item := range splitListInput(v) {
+			appendEntry(item)
+		}
+	}
+	appendEntry("*")
+	return entries
+}
+
+func splitListInput(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', '，', '\n', '\r', '\t':
+			return true
+		default:
+			return false
+		}
+	})
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }
 
 func normalizeFeishuChannelConfig(body map[string]interface{}) map[string]interface{} {
