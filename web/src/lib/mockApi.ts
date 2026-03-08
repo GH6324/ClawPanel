@@ -105,6 +105,21 @@ const FAKE_CONFIG: any = {
   agents: { defaults: { model: { primary: 'deepseek/deepseek-chat' } } },
   channels: {
     qq: { enabled: true, ownerQQ: '123456789' },
+    feishu: {
+      defaultAccount: 'default',
+      accounts: {
+        default: { appId: 'cli_demo' },
+      },
+      dmPolicy: 'pairing',
+    },
+  },
+  session: {
+    dmScope: 'per-peer',
+  },
+  plugins: {
+    entries: {
+      feishu: { enabled: true },
+    },
   },
   gateway: { wsUrl: 'ws://127.0.0.1:3001', accessToken: 'demo-token' },
   env: { vars: {} },
@@ -140,6 +155,28 @@ export const mockApi = {
   },
   getOpenClawConfig: async () => { await delay(200); return { ok: true, config: JSON.parse(JSON.stringify(FAKE_CONFIG)) }; },
   updateOpenClawConfig: async (_config: any) => { await delay(300); return { ok: true }; },
+  getFeishuDMDiagnosis: async () => {
+    await delay(160);
+    return {
+      ok: true,
+      diagnosis: {
+        configuredDmScope: 'per-peer',
+        effectiveDmScope: 'per-peer',
+        recommendedDmScope: 'per-peer',
+        defaultAgent: 'main',
+        scannedAgentIds: ['main'],
+        accountCount: 1,
+        accountIds: ['default'],
+        defaultAccount: 'default',
+        dmPolicy: 'pairing',
+        sessionIndexExists: true,
+        feishuSessionCount: 1,
+        feishuSessionKeys: ['agent:main:feishu:dm:ou_demo'],
+        hasSharedMainSessionKey: false,
+        mainSessionKey: 'agent:main:main',
+      },
+    };
+  },
   getAgentsConfig: async () => { await delay(150); return { ok: true, agents: JSON.parse(JSON.stringify(FAKE_AGENTS)) }; },
   createAgent: async (_agent: any) => { await delay(200); return { ok: true }; },
   updateAgent: async (_id: string, _agent: any) => { await delay(200); return { ok: true }; },
@@ -192,6 +229,7 @@ export const mockApi = {
   napcatLoginInfo: async () => { await delay(100); return { ok: true, uin: '2854196310', nickname: 'OpenClaw Demo Bot' }; },
   napcatLogout: async () => { await delay(500); return { ok: true }; },
   toggleChannel: async (_channelId: string, _enabled: boolean) => { await delay(300); return { ok: true, message: 'OK' }; },
+  switchFeishuVariant: async (_variant: 'official' | 'clawteam') => { await delay(220); return { ok: true, message: '飞书版本已切换（Demo）' }; },
   wechatStatus: async () => { await delay(100); return { ok: true, loggedIn: false }; },
   wechatLoginUrl: async () => { await delay(100); return { ok: true, url: '' }; },
   wechatSend: async () => { await delay(200); return { ok: true }; },

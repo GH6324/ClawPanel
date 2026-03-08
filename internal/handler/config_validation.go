@@ -69,6 +69,22 @@ func validateNumericField(raw interface{}, constraint numericFieldConstraint) er
 	return nil
 }
 
+func validateEnumField(raw interface{}, label string, allowed ...string) error {
+	if raw == nil {
+		return nil
+	}
+	value := strings.TrimSpace(toString(raw))
+	if value == "" {
+		return nil
+	}
+	for _, item := range allowed {
+		if value == item {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s 必须是以下值之一: %s", label, strings.Join(allowed, ", "))
+}
+
 func isFiniteNumber(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
@@ -147,6 +163,11 @@ func validateOpenClawNumericConfig(ocCfg map[string]interface{}) error {
 		if err := validateNumericField(rule.value, rule.constraint); err != nil {
 			return err
 		}
+	}
+	if err := validateEnumField(getNestedMapValue(ocCfg, "session", "dmScope"), "session.dmScope",
+		"main", "per-peer", "per-channel-peer", "per-account-channel-peer",
+	); err != nil {
+		return err
 	}
 	return nil
 }

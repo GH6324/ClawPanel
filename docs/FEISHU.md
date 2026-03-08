@@ -159,6 +159,9 @@ oc_group_b
 
 显式打开。
 
+注意：当前 OpenClaw 的有效字段是顶层 `session.dmScope`。  
+`channels.feishu.dmScope` 不是现行 schema，`user` / `chat` 也不是当前支持的枚举值。
+
 原因是实际隔离边界更接近：
 
 ```text
@@ -177,3 +180,4 @@ agentId + binding + session.dmScope + peer/session key
 4. binding 里的 `accountId` 是空值、具体账号，还是 `*`
 5. `session.dmScope` 是否已经显式收紧
 6. `groupPolicy / dmPolicy / groupAllowFrom` 是否和预期一致
+7. 当前 `sessions.json` 是否仍存在共享主会话键（例如 `agent:main:main`）

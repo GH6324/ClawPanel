@@ -192,6 +192,20 @@ Authorization: Bearer <token>
 ```
 
 > v5.1.0+：配置写入前会自动备份到 `OPENCLAW_DIR/backups/pre-edit-*.json`，并保留最近 10 份。
+>
+> v5.1.0+：保存时会校验 `session.dmScope`，仅允许：
+> `main / per-peer / per-channel-peer / per-account-channel-peer`。
+
+### GET `/api/openclaw/feishu-dm-diagnosis`
+读取飞书 DM 隔离诊断信息。
+
+返回内容会汇总：
+
+- 当前配置文件里的 `session.dmScope`
+- 面板推荐值（单账号通常 `per-channel-peer`，多账号通常 `per-account-channel-peer`）
+- 运行时 `sessions.json` 中检测到的飞书会话键
+- 是否仍存在共享主会话键（例如 `agent:main:main`）
+- 是否误写了 `channels.feishu.dmScope`
 
 ### GET `/api/openclaw/agents`
 获取多智能体配置与统计信息（`defaults` / `default` / `list` / `bindings`）。

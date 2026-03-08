@@ -1939,10 +1939,10 @@ function SessionIsolationSection({
     ? String(readConfigValue(config, 'session.dmScope')).trim()
     : '';
   const scopeCards: Array<{ id: string; label: string; help: string }> = [
-    { id: 'main', label: 'main', help: '所有私聊消息尽量复用主会话，最容易串上下文。' },
-    { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号单渠道场景。' },
-    { id: 'per-channel-peer', label: 'per-channel-peer', help: '再加上渠道维度，适合多渠道并行。' },
-    { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '把账号、渠道、peer 一起纳入隔离键，适合飞书双账号与多 Agent 路由。' },
+    { id: 'main', label: 'main', help: '所有私聊尽量复用主会话，隔离最弱。' },
+    { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号单渠道。' },
+    { id: 'per-channel-peer', label: 'per-channel-peer', help: '按渠道 + 私聊对端拆分，适合多渠道并行。' },
+    { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号。' },
   ];
 
   const setDmScope = (next: string) => {
@@ -1972,10 +1972,10 @@ function SessionIsolationSection({
         <div className="flex-1">
           <span className="text-sm font-bold text-gray-900 dark:text-white block">私聊上下文隔离</span>
           <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
-            把 <span className="font-mono">session.dmScope</span> 可视化出来，避免飞书双账号 / 多 Agent / 多私聊之间串上下文。
+            配置 <span className="font-mono">session.dmScope</span>，控制 OpenClaw 如何为私聊拆分会话键。
           </span>
           <span className="text-[10px] text-gray-400 mt-1 block">
-            当前：{rawDmScope || '未显式设置（报告建议 per-account-channel-peer）'}
+            当前：{rawDmScope || '未显式设置（运行时等价 main）'}
           </span>
         </div>
         {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
@@ -1983,10 +1983,10 @@ function SessionIsolationSection({
 
       {expanded && (
         <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
-          <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 p-4 text-[12px] text-sky-800 dark:text-sky-200 space-y-2">
-            <div className="font-semibold">隔离键心智模型</div>
-            <div>研究报告里的核心结论是：会话边界不只由群准入或白名单决定，而是近似取决于 <span className="font-mono">agentId + binding + session.dmScope + peer/session key</span>。</div>
-            <div>因此，哪怕你已经设置了 <span className="font-mono">groupPolicy</span>、<span className="font-mono">dmPolicy</span> 或 <span className="font-mono">accountId</span>，如果 <span className="font-mono">dmScope</span> 仍过粗，私聊上下文仍可能串在一起。</div>
+          <div className="rounded-xl border border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-900/30 p-4 text-[12px] text-gray-700 dark:text-gray-200 space-y-2">
+            <div className="font-semibold">作用范围</div>
+            <div><span className="font-mono">session.dmScope</span> 决定私聊会话是否按用户、渠道、账号继续拆分；群聊 / 私聊准入策略不会替代它。</div>
+            <div>如果你在飞书中启用了多账号或依赖 <span className="font-mono">accountId</span> 路由，建议显式设置为 <span className="font-mono">per-account-channel-peer</span>。</div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -2032,19 +2032,19 @@ function SessionIsolationSection({
                 }}
                 className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
               >
-                <option value="">未配置（建议 per-account-channel-peer）</option>
+                <option value="">未配置（运行时等价 main）</option>
                 {scopeCards.map(card => (
                   <option key={card.id} value={card.id}>{card.label}</option>
                 ))}
               </select>
             </div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50/80 dark:border-amber-900/40 dark:bg-amber-950/20 px-4 py-3 text-[12px] text-amber-800 dark:text-amber-200 space-y-1.5">
-              <div className="font-medium">飞书双账号场景推荐</div>
-              <div>如果你打算用 <span className="font-mono">channels.feishu.accounts/defaultAccount</span> + Agent 路由里的 <span className="font-mono">accountId</span> 共同拆分上下文，建议把这里显式设成 <span className="font-mono">per-account-channel-peer</span>。</div>
+            <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 px-4 py-3 text-[12px] text-sky-800 dark:text-sky-200 space-y-1.5">
+              <div className="font-medium">飞书多账号推荐</div>
+              <div>当 <span className="font-mono">channels.feishu.accounts/defaultAccount</span> 与 Agent 路由里的 <span className="font-mono">accountId</span> 一起使用时，优先选择 <span className="font-mono">per-account-channel-peer</span>。</div>
               <button
                 type="button"
                 onClick={clearDmScope}
-                className="mt-1 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md border border-amber-200 dark:border-amber-800 hover:bg-white/70 dark:hover:bg-black/10"
+                className="mt-1 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md border border-sky-200 dark:border-sky-800 hover:bg-white/70 dark:hover:bg-black/10"
               >
                 恢复为未配置
               </button>

@@ -23,6 +23,26 @@ type ChannelDef = {
   loginMethods?: ('qrcode' | 'quick' | 'password')[];
 };
 
+type FeishuDMDiagnosis = {
+  configuredDmScope?: string;
+  effectiveDmScope: string;
+  recommendedDmScope: string;
+  defaultAgent: string;
+  scannedAgentIds?: string[];
+  accountCount: number;
+  accountIds?: string[];
+  defaultAccount?: string;
+  dmPolicy?: string;
+  threadSession?: boolean;
+  unsupportedChannelDmScope?: string;
+  sessionFilePath?: string;
+  sessionIndexExists?: boolean;
+  feishuSessionCount?: number;
+  feishuSessionKeys?: string[];
+  hasSharedMainSessionKey?: boolean;
+  mainSessionKey?: string;
+};
+
 function isPlainObject(value: any): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -116,17 +136,24 @@ function formatChannelFieldDefaultValue(value: string | number | boolean | undef
 const FEISHU_FIELD_SECTIONS: Record<Exclude<ChannelFieldSection, 'default'>, { title: string; description: string }> = {
   access: {
     title: '接入与准入策略',
-    description: '先决定站点域、群聊/私聊能否接入，再决定群白名单与 @ 触发规则。',
+    description: '优先确定域名、群聊/私聊准入和 @ 触发规则，再决定是否启用群白名单。',
   },
   conversation: {
     title: '对话与输出体验',
-    description: '影响话题拆分、回复位置、页脚、流式卡片和名称解析等对话体验。',
+    description: '控制回复形态、话题拆分、页脚信息与名称解析等会话体验。',
   },
   advanced: {
     title: '高级兼容参数',
-    description: '补齐 gap analysis 里高频缺口字段；更深层配置仍可继续走 Raw JSON。',
+    description: '补齐高频兼容字段；更深层能力继续通过 Raw JSON 或插件原生配置扩展。',
   },
 };
+
+const FEISHU_DM_SCOPE_OPTIONS = [
+  { id: 'main', label: 'main', help: '所有私聊复用主会话，最容易串上下文。' },
+  { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号场景。' },
+  { id: 'per-channel-peer', label: 'per-channel-peer', help: '按渠道 + 私聊对端拆分，适合多渠道并行。' },
+  { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号。' },
+] as const;
 
 const CHANNEL_DEFS: ChannelDef[] = [
   { id: 'qq', label: 'QQ (NapCat)', description: 'QQ个人号，NapCat OneBot11协议', type: 'plugin',
@@ -197,8 +224,8 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu', defaultValue: 'feishu', section: 'access' },
       { key: 'requireMention', label: '群聊回复策略', type: 'select', options: ['true', 'false', 'open'], help: 'true = 仅 @ 机器人；false = 放宽触发；open = 以插件支持的开放模式处理', defaultValue: 'true', section: 'access' },
       { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊', defaultValue: 'open', section: 'access' },
-      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', placeholder: 'oc_xxx, oc_yyy', help: '支持英文逗号、中文逗号或换行分隔；仅 groupPolicy=allowlist 时生效，保存时会写成数组', section: 'access', rows: 3 },
       { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单', defaultValue: 'pairing', section: 'access' },
+      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', placeholder: 'oc_xxx, oc_yyy', help: '支持英文逗号、中文逗号或换行分隔；仅 groupPolicy=allowlist 时生效，保存时会写成数组', section: 'access', rows: 3 },
       { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '仅飞书官方版支持，开启后回复以流式卡片形式呈现', section: 'conversation' },
       { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '仅飞书官方版支持，每个话题拥有独立会话并可并行', section: 'conversation' },
       { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略', section: 'conversation' },
@@ -343,6 +370,10 @@ export default function Channels() {
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
   const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
   const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
+  const [feishuDmDiagnosis, setFeishuDmDiagnosis] = useState<FeishuDMDiagnosis | null>(null);
+  const [feishuDmScopeDraft, setFeishuDmScopeDraft] = useState('');
+  const [loadingFeishuDmDiagnosis, setLoadingFeishuDmDiagnosis] = useState(false);
+  const [savingFeishuDmScope, setSavingFeishuDmScope] = useState(false);
   const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const syncFeishuUiState = useCallback((config: any) => {
@@ -414,6 +445,21 @@ export default function Channels() {
     api.getSkills().then((r: any) => { if (r.ok) setInstalledPlugins(r.plugins || []); }).catch(() => {});
   };
 
+  const loadFeishuDmDiagnosis = useCallback(async () => {
+    setLoadingFeishuDmDiagnosis(true);
+    try {
+      const r = await api.getFeishuDMDiagnosis();
+      if (!r.ok) return;
+      const diagnosis = r.diagnosis as FeishuDMDiagnosis;
+      setFeishuDmDiagnosis(diagnosis);
+      setFeishuDmScopeDraft(String(diagnosis?.configuredDmScope || '').trim());
+    } catch {
+      // noop
+    } finally {
+      setLoadingFeishuDmDiagnosis(false);
+    }
+  }, []);
+
   const isPluginInstalled = (channelId: string) => {
     // 飞书特殊处理：任一版本已安装即视为已安装
     if (channelId === 'feishu') {
@@ -433,10 +479,11 @@ export default function Channels() {
       setChannelFieldTextDrafts({});
       syncFeishuUiState(nextConfig);
     });
+    loadFeishuDmDiagnosis();
     api.getRequests().then(r => { if (r.ok) setRequests(r.requests || []); });
   };
 
-  useEffect(() => { reload(); loadSoftware(); loadNapcatStatus(); loadInstalledPlugins(); }, []);
+  useEffect(() => { reload(); loadSoftware(); loadNapcatStatus(); loadInstalledPlugins(); }, [loadFeishuDmDiagnosis]);
   // 自动选择第一个已启用的渠道（而非硬编码 QQ）
   useEffect(() => {
     if (selectedChannel) return; // 用户已手动选择
@@ -477,6 +524,9 @@ export default function Channels() {
   const currentFeishuGroupPolicy = String(currentFeishuConfig.groupPolicy || '').trim();
   const currentFeishuGroupAllowFrom = formatCommaList(currentFeishuConfig.groupAllowFrom);
   const hasFeishuGroupAllowlistConflict = currentFeishuGroupPolicy !== 'allowlist' && !!currentFeishuGroupAllowFrom;
+  const currentConfiguredFeishuDmScope = String(feishuDmDiagnosis?.configuredDmScope || '').trim();
+  const currentEffectiveFeishuDmScope = String(feishuDmDiagnosis?.effectiveDmScope || 'main').trim() || 'main';
+  const hasPendingFeishuDmScopeChange = feishuDmScopeDraft !== currentConfiguredFeishuDmScope;
 
   const handleToggleFeishuAdvancedAccounts = (enabled: boolean) => {
     setFeishuAdvancedAccounts(enabled);
@@ -701,6 +751,35 @@ export default function Channels() {
     });
   };
 
+  const handleSaveFeishuDmScope = async () => {
+    setSavingFeishuDmScope(true);
+    setMsg('');
+    try {
+      const nextConfig = deepClone(ocConfig || {});
+      const nextScope = feishuDmScopeDraft.trim();
+      if (isPlainObject(nextConfig.channels?.feishu)) {
+        delete nextConfig.channels.feishu.dmScope;
+      }
+      if (nextScope) {
+        if (!isPlainObject(nextConfig.session)) nextConfig.session = {};
+        nextConfig.session.dmScope = nextScope;
+      } else if (isPlainObject(nextConfig.session)) {
+        delete nextConfig.session.dmScope;
+        if (Object.keys(nextConfig.session).length === 0) delete nextConfig.session;
+      }
+      const r = await api.updateOpenClawConfig(nextConfig);
+      if (!r.ok) throw new Error(r.error || '保存失败');
+      setOcConfig(nextConfig);
+      setMsg('私聊上下文隔离已保存');
+      await loadFeishuDmDiagnosis();
+      setTimeout(() => setMsg(''), 3000);
+    } catch (err) {
+      setMsg('保存私聊上下文隔离失败: ' + String(err));
+    } finally {
+      setSavingFeishuDmScope(false);
+    }
+  };
+
   // 飞书版本切换
   const handleSwitchFeishuVariant = async (variant: 'official' | 'clawteam') => {
     try {
@@ -896,12 +975,12 @@ export default function Channels() {
       ? (rawCurrentVal === true ? 'true' : rawCurrentVal === false ? 'false' : (rawCurrentVal ?? ''))
       : rawCurrentVal;
     const isFullWidth =
-      field.type === 'toggle'
-      || field.type === 'textarea'
+      field.type === 'textarea'
       || field.key === 'webhookUrl'
       || field.key === 'token'
       || field.key === 'accessToken'
       || field.key === 'appSecret';
+    const isCompactToggle = channelId === 'feishu' && field.type === 'toggle';
     const hasExplicitValue = currentVal !== undefined && currentVal !== null && currentVal !== '';
     const defaultHint = !hasExplicitValue && field.defaultValue !== undefined
       ? formatChannelFieldDefaultValue(field.defaultValue)
@@ -916,19 +995,32 @@ export default function Channels() {
 
     return (
       <div key={field.key} className={isFullWidth ? 'md:col-span-2' : ''}>
-        <div className="flex items-center justify-between mb-1.5 gap-3">
-          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+        {field.type !== 'toggle' && (
+          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
             {field.label}
           </label>
-          {field.help && <span className="text-[10px] text-gray-400 text-right">{field.help}</span>}
-        </div>
+        )}
 
         {field.type === 'toggle' ? (
-          <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
+          <div
+            className={`rounded-lg border transition-colors ${
+              isCompactToggle
+                ? 'flex items-start justify-between gap-4 px-4 py-3 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 h-full'
+                : 'flex items-center gap-3 p-3 border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30'
+            }`}
+          >
+            {isCompactToggle && (
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-gray-900 dark:text-white">{field.label}</div>
+                {field.help && (
+                  <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{field.help}</p>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => handleToggleField(channelId, field.key)}
-              className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${currentVal ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+              className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${currentVal ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}
             >
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${currentVal ? 'translate-x-4' : ''}`} />
             </button>
@@ -984,6 +1076,10 @@ export default function Channels() {
               </div>
             )}
           </div>
+        )}
+
+        {field.type !== 'toggle' && field.help && (
+          <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{field.help}</p>
         )}
 
         {defaultHint && (
@@ -1154,7 +1250,7 @@ export default function Channels() {
             (currentDef.type === 'plugin' && currentDef.id !== 'qq' && !isPluginInstalled(currentDef.id))
           ) && (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-6 space-y-6">
-              <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-800">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between pb-4 border-b border-gray-100 dark:border-gray-800">
                 <div className="flex items-center gap-4">
                   <div className={`p-2.5 rounded-xl ${isChannelEnabled(currentDef.id) ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
                     <Power size={20} />
@@ -1171,7 +1267,7 @@ export default function Channels() {
                     <p className="text-xs text-gray-500 mt-1">{currentDef.description}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 xl:justify-end">
                   {/* Enable/Disable toggle switch */}
                   <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-800">
                     <span className={`text-[11px] font-medium ${isChannelEnabled(currentDef.id) ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400'}`}>
@@ -1568,6 +1664,144 @@ export default function Channels() {
                 </div>
               )}
 
+              {currentDef.id === 'feishu' && (
+                <div className="rounded-xl border border-sky-200 dark:border-sky-800/40 bg-sky-50/50 dark:bg-sky-950/10 p-4 space-y-4">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-1.5">
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">私聊上下文隔离诊断</h4>
+                      <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+                        飞书私聊真正使用的是顶层 <span className="font-mono">session.dmScope</span>，不是
+                        <span className="mx-1 font-mono">channels.feishu.dmScope</span>。
+                        如果这里未写入，OpenClaw 运行时等价于 <span className="font-mono">main</span>。
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 xl:w-[540px]">
+                      <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 px-3 py-2.5">
+                        <div className="text-[11px] text-gray-500">配置文件</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+                          {currentConfiguredFeishuDmScope || '未设置'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 px-3 py-2.5">
+                        <div className="text-[11px] text-gray-500">当前生效</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+                          {currentEffectiveFeishuDmScope}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 px-3 py-2.5">
+                        <div className="text-[11px] text-gray-500">推荐值</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+                          {feishuDmDiagnosis?.recommendedDmScope || 'per-account-channel-peer'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">session.dmScope</label>
+                      <select
+                        value={feishuDmScopeDraft}
+                        onChange={e => setFeishuDmScopeDraft(e.target.value)}
+                        className="w-full px-3.5 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                      >
+                        <option value="">未配置（运行时等价 main）</option>
+                        {FEISHU_DM_SCOPE_OPTIONS.map(option => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </select>
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                        飞书多账号通常推荐 <span className="font-mono">{feishuDmDiagnosis?.recommendedDmScope || 'per-account-channel-peer'}</span>；
+                        单账号可选 <span className="font-mono">per-peer</span> 或 <span className="font-mono">per-channel-peer</span>。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFeishuDmScopeDraft(feishuDmDiagnosis?.recommendedDmScope || 'per-account-channel-peer')}
+                        className="px-3 py-2 text-xs font-medium rounded-lg border border-sky-200 text-sky-700 hover:bg-white dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/30"
+                      >
+                        应用推荐值
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveFeishuDmScope}
+                        disabled={savingFeishuDmScope || !hasPendingFeishuDmScopeChange}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+                      >
+                        {savingFeishuDmScope ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                        保存隔离设置
+                      </button>
+                    </div>
+                  </div>
+
+                  {feishuDmDiagnosis?.unsupportedChannelDmScope && (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                      检测到 <span className="font-mono">channels.feishu.dmScope = {feishuDmDiagnosis.unsupportedChannelDmScope}</span>。
+                      该字段不是当前 OpenClaw 的有效 schema，请改用上面的 <span className="font-mono">session.dmScope</span>。
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 p-3">
+                      <div className="text-xs font-semibold text-gray-900 dark:text-white">账号视角</div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                        已检测到账户 {feishuDmDiagnosis?.accountCount || 0} 个
+                        {feishuDmDiagnosis?.defaultAccount ? `，默认账号为 ${feishuDmDiagnosis.defaultAccount}` : ''}。
+                      </p>
+                      {!!feishuDmDiagnosis?.accountIds?.length && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {feishuDmDiagnosis.accountIds.map(accountId => (
+                            <span key={accountId} className="px-2 py-1 rounded-full border border-sky-100 dark:border-sky-900/40 bg-sky-50 dark:bg-sky-900/20 text-[11px] text-sky-700 dark:text-sky-300 font-mono">
+                              {accountId}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 p-3">
+                      <div className="text-xs font-semibold text-gray-900 dark:text-white">运行中会话</div>
+                      {loadingFeishuDmDiagnosis ? (
+                        <div className="mt-2 inline-flex items-center gap-2 text-[11px] text-gray-500">
+                          <Loader2 size={13} className="animate-spin" />
+                          正在读取当前会话索引…
+                        </div>
+                      ) : feishuDmDiagnosis?.sessionIndexExists ? (
+                        <>
+                          <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                            已在
+                            <span className="mx-1 font-mono">{feishuDmDiagnosis.scannedAgentIds?.join(', ') || feishuDmDiagnosis.defaultAgent}</span>
+                            的会话索引中检测到
+                            <span className="mx-1 font-mono">{feishuDmDiagnosis.feishuSessionCount || 0}</span> 个飞书会话。
+                          </p>
+                          {!!feishuDmDiagnosis?.feishuSessionKeys?.length && (
+                            <div className="mt-2 space-y-1">
+                              {feishuDmDiagnosis.feishuSessionKeys.slice(0, 3).map(sessionKey => (
+                                <div key={sessionKey} className="rounded-md bg-gray-50 dark:bg-slate-950/40 px-2.5 py-1.5 text-[11px] text-gray-600 dark:text-gray-300 font-mono break-all">
+                                  {sessionKey}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                          当前尚未读取到 <span className="font-mono">sessions.json</span>；保存后可通过新私聊或重置会话来观察分桶结果。
+                        </p>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 p-3">
+                      <div className="text-xs font-semibold text-gray-900 dark:text-white">落地提示</div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                        {feishuDmDiagnosis?.hasSharedMainSessionKey
+                          ? <>当前仍存在共享主会话键 <span className="font-mono">{feishuDmDiagnosis.mainSessionKey}</span>。写入新值后，新的私聊消息会按新键创建；旧会话如需立即拆分，需重置对应会话或重启后观察。</>
+                          : <>当前未检测到共享主会话键。若已写入推荐值，新的飞书私聊应按账号 / 渠道 / 对端拆分。</>}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {currentDef.id === 'feishu' && hasFeishuGroupAllowlistConflict && (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/70 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
                   当前 <span className="font-mono">groupPolicy</span> 为 <span className="font-mono">{currentFeishuGroupPolicy || '未配置（默认 open）'}</span>，
@@ -1592,7 +1826,7 @@ export default function Channels() {
                             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">{sectionMeta.title}</h4>
                             <p className="text-xs text-gray-500 mt-1 leading-relaxed">{sectionMeta.description}</p>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-4">
                             {visibleFields.map(field => renderConfigField(currentDef.id, field))}
                           </div>
                         </div>

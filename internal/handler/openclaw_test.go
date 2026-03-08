@@ -136,6 +136,172 @@ func TestSaveOpenClawConfigRejectsInvalidNumericFields(t *testing.T) {
 	}
 }
 
+func TestSaveOpenClawConfigRejectsInvalidDMScope(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+
+	r := gin.New()
+	r.PUT("/openclaw/config", SaveOpenClawConfig(cfg))
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"config": map[string]interface{}{
+			"session": map[string]interface{}{
+				"dmScope": "user",
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "session.dmScope") {
+		t.Fatalf("expected dmScope validation error, got %s", w.Body.String())
+	}
+}
+
+func TestGetFeishuDMDiagnosisReportsSharedMainSession(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+
+	rawConfig, _ := json.Marshal(map[string]interface{}{
+		"channels": map[string]interface{}{
+			"feishu": map[string]interface{}{
+				"defaultAccount": "fly",
+				"accounts": map[string]interface{}{
+					"backup": map[string]interface{}{"appId": "cli_backup"},
+					"fly":    map[string]interface{}{"appId": "cli_fly"},
+				},
+				"dmPolicy": "pairing",
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "openclaw.json"), rawConfig, 0644); err != nil {
+		t.Fatalf("write openclaw.json: %v", err)
+	}
+
+	sessionDir := filepath.Join(dir, "agents", "main", "sessions")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	rawSessions, _ := json.Marshal(map[string]interface{}{
+		"agent:main:main": map[string]interface{}{
+			"deliveryContext": map[string]interface{}{
+				"channel":   "feishu",
+				"accountId": "fly",
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(sessionDir, "sessions.json"), rawSessions, 0644); err != nil {
+		t.Fatalf("write sessions.json: %v", err)
+	}
+
+	r := gin.New()
+	r.GET("/openclaw/feishu-dm-diagnosis", GetFeishuDMDiagnosis(cfg))
+	req := httptest.NewRequest(http.MethodGet, "/openclaw/feishu-dm-diagnosis", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		OK        bool              `json:"ok"`
+		Diagnosis FeishuDMDiagnosis `json:"diagnosis"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected ok response: %s", w.Body.String())
+	}
+	if resp.Diagnosis.ConfiguredDMScope != "" {
+		t.Fatalf("expected configured dmScope to be empty, got %q", resp.Diagnosis.ConfiguredDMScope)
+	}
+	if resp.Diagnosis.EffectiveDMScope != "main" {
+		t.Fatalf("expected effective dmScope main, got %q", resp.Diagnosis.EffectiveDMScope)
+	}
+	if resp.Diagnosis.RecommendedDMScope != "per-account-channel-peer" {
+		t.Fatalf("expected recommended dmScope per-account-channel-peer, got %q", resp.Diagnosis.RecommendedDMScope)
+	}
+	if !resp.Diagnosis.HasSharedMainSessionKey {
+		t.Fatalf("expected shared main session key to be detected")
+	}
+	if resp.Diagnosis.FeishuSessionCount != 1 {
+		t.Fatalf("expected one feishu session, got %d", resp.Diagnosis.FeishuSessionCount)
+	}
+	if resp.Diagnosis.MainSessionKey != "agent:main:main" {
+		t.Fatalf("unexpected main session key: %q", resp.Diagnosis.MainSessionKey)
+	}
+}
+
+func TestGetFeishuDMDiagnosisScansAllAgents(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+
+	rawConfig, _ := json.Marshal(map[string]interface{}{
+		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "default": true},
+				map[string]interface{}{"id": "work"},
+			},
+		},
+		"channels": map[string]interface{}{
+			"feishu": map[string]interface{}{
+				"appId": "cli_main",
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "openclaw.json"), rawConfig, 0644); err != nil {
+		t.Fatalf("write openclaw.json: %v", err)
+	}
+
+	sessionDir := filepath.Join(dir, "agents", "work", "sessions")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("mkdir work sessions: %v", err)
+	}
+	rawSessions, _ := json.Marshal(map[string]interface{}{
+		"agent:work:main": map[string]interface{}{
+			"deliveryContext": map[string]interface{}{
+				"channel": "feishu",
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(sessionDir, "sessions.json"), rawSessions, 0644); err != nil {
+		t.Fatalf("write work sessions.json: %v", err)
+	}
+
+	diagnosis := buildFeishuDMDiagnosis(cfg)
+	if !diagnosis.SessionIndexExists {
+		t.Fatalf("expected at least one session index to be detected")
+	}
+	if diagnosis.FeishuSessionCount != 1 {
+		t.Fatalf("expected one feishu session across agents, got %d", diagnosis.FeishuSessionCount)
+	}
+	if !diagnosis.HasSharedMainSessionKey {
+		t.Fatalf("expected shared main session key from non-default agent to be detected")
+	}
+	if diagnosis.MainSessionKey != "agent:work:main" {
+		t.Fatalf("expected shared main session key from work agent, got %q", diagnosis.MainSessionKey)
+	}
+	if len(diagnosis.ScannedAgentIDs) != 1 || diagnosis.ScannedAgentIDs[0] != "work" {
+		t.Fatalf("expected only work agent session index to be scanned, got %#v", diagnosis.ScannedAgentIDs)
+	}
+}
+
 func TestPatchModelsJSONForAgentUsesConfiguredAgentDir(t *testing.T) {
 	t.Parallel()
 
@@ -282,5 +448,23 @@ func TestNormalizeFeishuChannelConfigDropsAllowlistOutsideAllowlistPolicy(t *tes
 	}
 	if _, exists := got["groupAllowFrom"]; exists {
 		t.Fatalf("expected groupAllowFrom to be removed when policy is not allowlist, got %#v", got["groupAllowFrom"])
+	}
+}
+
+func TestNormalizeFeishuChannelConfigDropsLegacyDMScope(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"dmScope":  "user",
+		"dmPolicy": "pairing",
+	}
+
+	got := normalizeFeishuChannelConfig(input)
+
+	if _, exists := got["dmScope"]; exists {
+		t.Fatalf("expected legacy dmScope to be removed, got %#v", got["dmScope"])
+	}
+	if got["dmPolicy"] != "pairing" {
+		t.Fatalf("expected dmPolicy to be preserved, got %#v", got["dmPolicy"])
 	}
 }

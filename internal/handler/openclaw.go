@@ -297,6 +297,7 @@ func normalizeFeishuChannelConfig(body map[string]interface{}) map[string]interf
 	if body == nil {
 		return map[string]interface{}{}
 	}
+	delete(body, "dmScope")
 
 	if raw, exists := body["requireMention"]; exists {
 		switch v := raw.(type) {

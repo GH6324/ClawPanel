@@ -50,6 +50,8 @@ sender > peer > parentPeer > guildId+roles > guildId > teamId > accountId > acco
 - `per-channel-peer`
 - `per-account-channel-peer`
 
+> `channels.feishu.dmScope` 不是当前 OpenClaw schema；若看到 `user` / `chat` 之类写法，应改回顶层 `session.dmScope`。
+
 ### 飞书双账号推荐值
 
 如果你在飞书里使用：
