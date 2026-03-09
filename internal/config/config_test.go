@@ -656,3 +656,205 @@ func TestReadQQChannelStateSupportsJSON5(t *testing.T) {
 		t.Fatalf("expected qq access token to be preserved, got %q", token)
 	}
 }
+
+// TestMarshalOpenClawJSONMatchesStdlibForNonFeishu verifies that the custom
+// serializer produces output equivalent to json.MarshalIndent for all
+// non-feishu structures: plugins, cron, hooks, tools, gateway, agents, etc.
+// The only expected difference is feishu defaultAccount key ordering.
+func TestMarshalOpenClawJSONMatchesStdlibForNonFeishu(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		data map[string]interface{}
+	}{
+		{
+			name: "plugins",
+			data: map[string]interface{}{
+				"plugins": map[string]interface{}{
+					"entries": map[string]interface{}{
+						"memory-plugin": map[string]interface{}{"enabled": true},
+						"alpha-plugin":  map[string]interface{}{"enabled": false},
+					},
+					"installs": map[string]interface{}{
+						"memory-plugin": map[string]interface{}{
+							"source":  "npm",
+							"version": "1.0.0",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "cron",
+			data: map[string]interface{}{
+				"cron": map[string]interface{}{
+					"jobs": []interface{}{
+						map[string]interface{}{
+							"id":       "backup",
+							"schedule": "0 2 * * *",
+							"task":     "backup database",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tools",
+			data: map[string]interface{}{
+				"tools": map[string]interface{}{
+					"exec": map[string]interface{}{
+						"enabled":  true,
+						"commands": []interface{}{"ls", "cat"},
+					},
+					"browser": map[string]interface{}{
+						"enabled": false,
+					},
+				},
+			},
+		},
+		{
+			name: "gateway",
+			data: map[string]interface{}{
+				"gateway": map[string]interface{}{
+					"host":     "0.0.0.0",
+					"port":     float64(3000),
+					"bindMode": "loopback",
+				},
+			},
+		},
+		{
+			name: "agents",
+			data: map[string]interface{}{
+				"agents": map[string]interface{}{
+					"defaults": map[string]interface{}{
+						"contextTokens": float64(800000),
+						"compaction": map[string]interface{}{
+							"mode":            "default",
+							"maxHistoryShare": 0.8,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "mixed_top_level",
+			data: map[string]interface{}{
+				"session": map[string]interface{}{
+					"dmScope": "user",
+				},
+				"hooks": map[string]interface{}{
+					"onStart": "echo hello",
+				},
+				"gateway": map[string]interface{}{
+					"port": float64(8080),
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			customOut, err := marshalOpenClawJSON(tc.data)
+			if err != nil {
+				t.Fatalf("marshalOpenClawJSON failed: %v", err)
+			}
+			stdOut, err := json.MarshalIndent(tc.data, "", "  ")
+			if err != nil {
+				t.Fatalf("json.MarshalIndent failed: %v", err)
+			}
+
+			// Normalize: unmarshal both and compare semantically
+			var customParsed, stdParsed interface{}
+			if err := json.Unmarshal(customOut, &customParsed); err != nil {
+				t.Fatalf("custom output is not valid JSON: %v\n%s", err, customOut)
+			}
+			if err := json.Unmarshal(stdOut, &stdParsed); err != nil {
+				t.Fatalf("stdlib output is not valid JSON: %v", err)
+			}
+			customCanon, _ := json.Marshal(customParsed)
+			stdCanon, _ := json.Marshal(stdParsed)
+			if string(customCanon) != string(stdCanon) {
+				t.Errorf("semantic mismatch:\ncustom: %s\nstdlib: %s", customOut, stdOut)
+			}
+		})
+	}
+}
+
+// TestMarshalOpenClawJSONFeishuDefaultAccountOrdering confirms the custom
+// serializer's unique behavior: the feishu defaultAccount is placed first
+// in the accounts map, which cannot be achieved with json.MarshalIndent.
+func TestMarshalOpenClawJSONFeishuDefaultAccountOrdering(t *testing.T) {
+	t.Parallel()
+
+	data := map[string]interface{}{
+		"channels": map[string]interface{}{
+			"feishu": map[string]interface{}{
+				"defaultAccount": "beta",
+				"accounts": map[string]interface{}{
+					"alpha": map[string]interface{}{"appId": "a"},
+					"beta":  map[string]interface{}{"appId": "b"},
+					"gamma": map[string]interface{}{"appId": "c"},
+				},
+			},
+		},
+	}
+
+	out, err := marshalOpenClawJSON(data)
+	if err != nil {
+		t.Fatalf("marshalOpenClawJSON failed: %v", err)
+	}
+	text := string(out)
+	accountsIdx := strings.Index(text, `"accounts": {`)
+	if accountsIdx < 0 {
+		t.Fatalf("no accounts block found")
+	}
+	sub := text[accountsIdx:]
+	betaIdx := strings.Index(sub, `"beta"`)
+	alphaIdx := strings.Index(sub, `"alpha"`)
+	if betaIdx > alphaIdx {
+		t.Fatalf("expected beta (defaultAccount) before alpha, got beta@%d alpha@%d", betaIdx, alphaIdx)
+	}
+}
+
+// TestWriteOpenClawJSONRoundTrip verifies that data survives a write→read
+// cycle intact for non-feishu config structures.
+func TestWriteOpenClawJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &Config{OpenClawDir: dir}
+
+	input := map[string]interface{}{
+		"plugins": map[string]interface{}{
+			"entries": map[string]interface{}{
+				"my-plugin": map[string]interface{}{"enabled": true},
+			},
+		},
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"contextTokens": float64(500000),
+			},
+		},
+		"gateway": map[string]interface{}{
+			"port": float64(3000),
+		},
+	}
+
+	if err := cfg.WriteOpenClawJSON(input); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	output, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	inJSON, _ := json.Marshal(input)
+	outJSON, _ := json.Marshal(output)
+	if string(inJSON) != string(outJSON) {
+		t.Errorf("round-trip mismatch:\ninput:  %s\noutput: %s", inJSON, outJSON)
+	}
+}

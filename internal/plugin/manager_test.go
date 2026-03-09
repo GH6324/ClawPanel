@@ -375,3 +375,136 @@ func TestScanInstalledPluginsKeepsPluginWhenCompatManifestWriteFails(t *testing.
 		t.Fatalf("expected plugin to stay visible even when compat manifest cannot be written")
 	}
 }
+
+// TestScanInstalledPluginsIsReadOnly verifies that scanInstalledPlugins does
+// not write any files to disk — neither openclaw.plugin.json in the plugin
+// directory nor openclaw.json in the config directory.
+func TestScanInstalledPluginsIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	openClawDir := filepath.Join(dir, "openclaw")
+	if err := os.MkdirAll(openClawDir, 0o755); err != nil {
+		t.Fatalf("mkdir openclaw dir: %v", err)
+	}
+	pluginsDir := filepath.Join(dir, "extensions")
+	pluginDir := filepath.Join(pluginsDir, "test-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("mkdir plugin dir: %v", err)
+	}
+
+	data, _ := json.Marshal(map[string]interface{}{
+		"id":          "test-plugin",
+		"name":        "Test Plugin",
+		"version":     "1.0.0",
+		"description": "for scan read-only test",
+	})
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0o644); err != nil {
+		t.Fatalf("write plugin.json: %v", err)
+	}
+
+	m := &Manager{
+		cfg:        &config.Config{OpenClawDir: openClawDir},
+		plugins:    map[string]*InstalledPlugin{},
+		pluginsDir: pluginsDir,
+		configFile: filepath.Join(dir, "plugins.json"),
+	}
+
+	// Record state before scan
+	manifestPath := filepath.Join(pluginDir, "openclaw.plugin.json")
+	ocConfigPath := filepath.Join(openClawDir, "openclaw.json")
+
+	m.scanInstalledPlugins()
+
+	// Plugin should be discovered in memory
+	p, ok := m.plugins["test-plugin"]
+	if !ok {
+		t.Fatalf("expected scan to discover test-plugin")
+	}
+	if !p.NeedManifestRepair {
+		t.Fatalf("expected NeedManifestRepair to be true for plugin without manifest")
+	}
+	if !p.NeedConfigSync {
+		t.Fatalf("expected NeedConfigSync to be true for newly-discovered plugin")
+	}
+
+	// No files should have been written
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Fatalf("scanInstalledPlugins should not create openclaw.plugin.json, but it exists")
+	}
+	if _, err := os.Stat(ocConfigPath); !os.IsNotExist(err) {
+		t.Fatalf("scanInstalledPlugins should not create/modify openclaw.json, but it exists")
+	}
+}
+
+// TestReconcilePluginStatesWritesDeferredChanges verifies that
+// reconcilePluginStates writes the manifest and config files for flagged
+// plugins and clears the flags afterwards.
+func TestReconcilePluginStatesWritesDeferredChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	openClawDir := filepath.Join(dir, "openclaw")
+	if err := os.MkdirAll(openClawDir, 0o755); err != nil {
+		t.Fatalf("mkdir openclaw dir: %v", err)
+	}
+	pluginsDir := filepath.Join(dir, "extensions")
+	pluginDir := filepath.Join(pluginsDir, "reconcile-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("mkdir plugin dir: %v", err)
+	}
+
+	data, _ := json.Marshal(map[string]interface{}{
+		"id":          "reconcile-plugin",
+		"name":        "Reconcile Plugin",
+		"version":     "2.0.0",
+		"description": "for reconcile test",
+	})
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0o644); err != nil {
+		t.Fatalf("write plugin.json: %v", err)
+	}
+
+	m := &Manager{
+		cfg:        &config.Config{OpenClawDir: openClawDir},
+		plugins:    map[string]*InstalledPlugin{},
+		pluginsDir: pluginsDir,
+		configFile: filepath.Join(dir, "plugins.json"),
+	}
+
+	// Scan (read-only) then reconcile (writes)
+	m.scanInstalledPlugins()
+	m.reconcilePluginStates()
+
+	p := m.plugins["reconcile-plugin"]
+	if p == nil {
+		t.Fatalf("expected plugin to be present after reconcile")
+	}
+	if p.NeedManifestRepair {
+		t.Fatalf("expected NeedManifestRepair to be cleared after reconcile")
+	}
+	if p.NeedConfigSync {
+		t.Fatalf("expected NeedConfigSync to be cleared after reconcile")
+	}
+
+	// Manifest should now exist
+	manifestPath := filepath.Join(pluginDir, "openclaw.plugin.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("expected openclaw.plugin.json to be created by reconcile: %v", err)
+	}
+
+	// openclaw.json should have the plugin entry
+	ocConfigPath := filepath.Join(openClawDir, "openclaw.json")
+	raw, err := os.ReadFile(ocConfigPath)
+	if err != nil {
+		t.Fatalf("expected openclaw.json to be written: %v", err)
+	}
+	var ocConfig map[string]interface{}
+	if err := json.Unmarshal(raw, &ocConfig); err != nil {
+		t.Fatalf("invalid openclaw.json: %v", err)
+	}
+	plugins, _ := ocConfig["plugins"].(map[string]interface{})
+	entries, _ := plugins["entries"].(map[string]interface{})
+	if _, ok := entries["reconcile-plugin"]; !ok {
+		t.Fatalf("expected reconcile-plugin in openclaw.json entries")
+	}
+}

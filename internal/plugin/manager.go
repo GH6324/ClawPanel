@@ -57,6 +57,13 @@ type InstalledPlugin struct {
 	Dir         string                 `json:"dir"`
 	Config      map[string]interface{} `json:"config,omitempty"`
 	LogLines    []string               `json:"logLines,omitempty"`
+
+	// NeedManifestRepair is true when openclaw.plugin.json is missing or stale.
+	// Set by scan, cleared after reconcile.
+	NeedManifestRepair bool `json:"-"`
+	// NeedConfigSync is true when the plugin needs to be registered in openclaw.json.
+	// Set by scan for newly-discovered plugins, cleared after reconcile.
+	NeedConfigSync bool `json:"-"`
 }
 
 // RegistryPlugin represents a plugin in the registry
@@ -102,7 +109,8 @@ func NewManager(cfg *config.Config) *Manager {
 		configFile: filepath.Join(cfg.DataDir, "plugins.json"),
 	}
 	m.loadPluginsState()
-	m.scanInstalledPlugins()
+	m.scanInstalledPlugins()        // read-only: discover plugins
+	m.reconcilePluginStates()       // write phase: sync manifests & config
 	return m
 }
 
@@ -762,6 +770,11 @@ func (m *Manager) CheckConflicts(pluginID string) []string {
 
 // --- Internal methods ---
 
+// scanInstalledPlugins discovers plugins on disk and updates in-memory state.
+// It is intentionally read-only: no files are written to either the plugin
+// directories or openclaw.json. Plugins that need manifest repair or config
+// sync are flagged via NeedManifestRepair / NeedConfigSync for a subsequent
+// reconcilePluginStates call.
 func (m *Manager) scanInstalledPlugins() {
 	entries, err := os.ReadDir(m.pluginsDir)
 	if err != nil {
@@ -777,32 +790,81 @@ func (m *Manager) scanInstalledPlugins() {
 		if err != nil {
 			continue
 		}
-		if err := m.ensureOpenClawPluginManifest(pluginDir, meta); err != nil {
-			log.Printf("warn: could not write openclaw.plugin.json for %s: %v", meta.ID, err)
+
+		needManifest := false
+		manifestPath := filepath.Join(pluginDir, "openclaw.plugin.json")
+		if _, statErr := os.Stat(manifestPath); os.IsNotExist(statErr) {
+			needManifest = true
 		}
 
-		enabled := true
-		source := "local"
-		version := meta.Version
 		m.mu.Lock()
 		if _, exists := m.plugins[meta.ID]; !exists {
 			m.plugins[meta.ID] = &InstalledPlugin{
-				PluginMeta:  *meta,
-				Enabled:     true,
-				InstalledAt: time.Now().Format(time.RFC3339),
-				Source:      "local",
-				Dir:         pluginDir,
+				PluginMeta:         *meta,
+				Enabled:            true,
+				InstalledAt:        time.Now().Format(time.RFC3339),
+				Source:             "local",
+				Dir:                pluginDir,
+				NeedManifestRepair: needManifest,
+				NeedConfigSync:     true,
 			}
 		} else {
-			// Update dir path and metadata from disk
 			m.plugins[meta.ID].Dir = pluginDir
 			m.plugins[meta.ID].PluginMeta = *meta
-			enabled = m.plugins[meta.ID].Enabled
-			source = m.plugins[meta.ID].Source
+			m.plugins[meta.ID].NeedManifestRepair = needManifest
 		}
 		m.mu.Unlock()
-		if err := m.syncOpenClawPluginState(meta.ID, pluginDir, enabled, source, version); err != nil {
+	}
+}
+
+// reconcilePluginStates performs deferred writes for plugins flagged during
+// scan. It generates missing openclaw.plugin.json manifests and syncs new
+// plugin entries into openclaw.json. Explicit install/enable/disable flows
+// handle their own writes independently.
+func (m *Manager) reconcilePluginStates() {
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.plugins))
+	for id := range m.plugins {
+		ids = append(ids, id)
+	}
+	m.mu.RUnlock()
+
+	for _, id := range ids {
+		m.mu.RLock()
+		p := m.plugins[id]
+		if p == nil {
+			m.mu.RUnlock()
 			continue
+		}
+		needManifest := p.NeedManifestRepair
+		needSync := p.NeedConfigSync
+		dir := p.Dir
+		enabled := p.Enabled
+		source := p.Source
+		version := p.Version
+		meta := p.PluginMeta
+		m.mu.RUnlock()
+
+		if needManifest {
+			if err := m.ensureOpenClawPluginManifest(dir, &meta); err != nil {
+				log.Printf("warn: could not write openclaw.plugin.json for %s: %v", id, err)
+			} else {
+				m.mu.Lock()
+				if pp := m.plugins[id]; pp != nil {
+					pp.NeedManifestRepair = false
+				}
+				m.mu.Unlock()
+			}
+		}
+		if needSync {
+			if err := m.syncOpenClawPluginState(id, dir, enabled, source, version); err != nil {
+				continue
+			}
+			m.mu.Lock()
+			if pp := m.plugins[id]; pp != nil {
+				pp.NeedConfigSync = false
+			}
+			m.mu.Unlock()
 		}
 	}
 }
