@@ -782,8 +782,8 @@ func TestGetOpenClawAgentCoreFilesAllowsConfiguredWorkspaceOutsideStandardRoots(
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for explicitly configured workspace, got %d: %s", w.Code, w.Body.String())
+	if !expectAgentCoreIOStatus(t, w, http.StatusOK) {
+		return
 	}
 }
 
@@ -813,8 +813,8 @@ func TestSaveOpenClawAgentCoreFileAllowsConfiguredWorkspaceOutsideStandardRoots(
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for explicitly configured workspace, got %d: %s", w.Code, w.Body.String())
+	if !expectAgentCoreIOStatus(t, w, http.StatusOK) {
+		return
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "MEMORY.md")); os.IsNotExist(err) {
 		t.Fatalf("expected MEMORY.md to be written in outside workspace")
