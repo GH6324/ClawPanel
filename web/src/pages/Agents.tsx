@@ -1334,7 +1334,7 @@ export default function Agents() {
   const [workbenchView, setWorkbenchView] = useState<AgentsWorkbenchView>('directory');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [detailTab, setDetailTab] = useState<AgentDetailTab>('overview');
-  const [expandedBindingIndex, setExpandedBindingIndex] = useState<number | null>(0);
+  const [expandedBindingIndex, setExpandedBindingIndex] = useState<number | null>(null);
 
   const [defaultAgent, setDefaultAgent] = useState('main');
   const [defaultConfigured, setDefaultConfigured] = useState(false);
@@ -1642,6 +1642,7 @@ export default function Agents() {
         setDefaultConfigured(data.defaultConfigured === true);
         setAgents(list);
         setBindings(incomingBindings.map((b: any) => toBindingDraft(b, fallback)));
+        setExpandedBindingIndex(incomingBindings.length > 0 ? 0 : null);
         nextDefaultModelHint = extractModelDraft(defaults.model).primary;
         setDefaultModelHint(nextDefaultModelHint);
         const defaultContextTokens = Number(defaults.contextTokens);
@@ -1661,6 +1662,7 @@ export default function Agents() {
         setDefaultConfigured(false);
         setAgents([]);
         setBindings([]);
+        setExpandedBindingIndex(null);
         setDefaultModelHint('');
         setAgentDefaults(EMPTY_AGENT_DEFAULTS);
       }
@@ -1697,6 +1699,7 @@ export default function Agents() {
       setDefaultConfigured(false);
       setAgents([]);
       setBindings([]);
+      setExpandedBindingIndex(null);
       setChannelConfigs({});
       setChannelMeta({});
       setModelOptions([]);
@@ -1841,8 +1844,8 @@ export default function Agents() {
       if (expandedBindingIndex !== null) setExpandedBindingIndex(null);
       return;
     }
-    if (expandedBindingIndex === null || expandedBindingIndex >= bindings.length) {
-      setExpandedBindingIndex(0);
+    if (expandedBindingIndex !== null && expandedBindingIndex >= bindings.length) {
+      setExpandedBindingIndex(bindings.length - 1);
     }
   }, [bindings.length, expandedBindingIndex]);
 
