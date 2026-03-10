@@ -61,6 +61,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
       '/agents',
       '/channels',
       '/skills',
+      '/plugins',
       '/workflows',
       '/workspace',
       '/config',
