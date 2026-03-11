@@ -1,12 +1,9 @@
 {
-  "latest_version": "0.1.4",
-  "release_time": "2026-03-11T01:10:00+08:00",
-  "release_note": "## ClawPanel Lite v0.1.4\n\n- Lite 面板内更新改为整包更新，自动同步面板、内置 OpenClaw 与预置插件\n- 安装与更新新增 GitHub / 加速服务器线路选择，并给出地域建议\n- 版本管理页面现在会明确显示当前是 Lite 版还是 Pro 版",
+  "latest_version": "0.1.5",
+  "release_time": "2026-03-11T23:40:00+08:00",
+  "release_note": "## ClawPanel Lite v0.1.5\n\n- 继续推进 Windows / macOS Lite 打包脚手架与安装脚本\n- Lite 打包链开始向 GitHub Actions 原生平台构建过渡\n- 当前 Linux Lite 仍为正式可用版本，Windows / macOS Lite 处于预览推进阶段",
   "download_urls": {
-    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.4-linux-amd64.tar.gz",
-    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.4-darwin-amd64.tar.gz",
-    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.4-darwin-arm64.tar.gz",
-    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.4-windows-amd64.tar.gz"
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.5-linux-amd64.tar.gz"
   },
   "major_change": false,
   "change_warning": ""

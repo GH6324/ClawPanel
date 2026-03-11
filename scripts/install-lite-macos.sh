@@ -8,7 +8,7 @@ TAG_PREFIX="lite-v"
 ACCEL_BASE="http://39.102.53.188:16198/clawpanel"
 ACCEL_META_URL="${ACCEL_BASE}/update-lite.json"
 GITHUB_RELEASES_API="https://api.github.com/repos/${REPO}/releases?per_page=20"
-DEFAULT_VERSION="0.1.4"
+DEFAULT_VERSION="0.1.5"
 
 log(){ printf '[Lite] %s\n' "$1"; }
 err(){ printf '[Lite] %s\n' "$1" >&2; exit 1; }
