@@ -7,17 +7,17 @@ import OpenClawRequired from './components/OpenClawRequired';
 import UpdatePopup from './components/UpdatePopup';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import ActivityLog from './pages/ActivityLog';
-import CronJobs from './pages/CronJobs';
-import Sessions from './pages/Sessions';
-import Workspace from './pages/Workspace';
 
+const ActivityLog = lazy(() => import('./pages/ActivityLog'));
 const Channels = lazy(() => import('./pages/Channels'));
+const CronJobs = lazy(() => import('./pages/CronJobs'));
 const Skills = lazy(() => import('./pages/Skills'));
 const SystemConfig = lazy(() => import('./pages/SystemConfig'));
 const Plugins = lazy(() => import('./pages/Plugins'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Workflows = lazy(() => import('./pages/Workflows'));
+const Sessions = lazy(() => import('./pages/Sessions'));
+const Workspace = lazy(() => import('./pages/Workspace'));
 
 function RouteLoadingFallback() {
   return (
@@ -53,8 +53,8 @@ export default function App() {
     <UpdatePopup />
     <Routes>
       <Route element={<Layout onLogout={auth.logout} napcatStatus={ws.napcatStatus} wechatStatus={ws.wechatStatus} openclawStatus={ws.openclawStatus} processStatus={ws.processStatus} wsMessages={ws.wsMessages} />}>
-        <Route path="/" element={<Dashboard ws={ws} />} />
-        <Route path="/logs" element={<ActivityLog ws={ws} />} />
+        <Route path="/" element={<Dashboard logEntries={ws.logEntries} refreshLog={ws.refreshLog} />} />
+        <Route path="/logs" element={<Suspense fallback={<RouteLoadingFallback />}><ActivityLog logEntries={ws.logEntries} clearEvents={ws.clearEvents} refreshLog={ws.refreshLog} /></Suspense>} />
         <Route path="/channels" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Channels /></Suspense></OpenClawRequired>} />
         <Route path="/skills" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Skills /></Suspense></OpenClawRequired>} />
         <Route path="/plugins" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Plugins /></Suspense></OpenClawRequired>} />
@@ -62,10 +62,10 @@ export default function App() {
           <Route path="/agents" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Agents /></Suspense></OpenClawRequired>} />
         )}
         <Route path="/workflows" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Workflows /></Suspense></OpenClawRequired>} />
-        <Route path="/cron" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><CronJobs /></OpenClawRequired>} />
-        <Route path="/sessions" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Sessions /></OpenClawRequired>} />
+        <Route path="/cron" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><CronJobs /></Suspense></OpenClawRequired>} />
+        <Route path="/sessions" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Sessions /></Suspense></OpenClawRequired>} />
         <Route path="/config" element={<Suspense fallback={<RouteLoadingFallback />}><SystemConfig /></Suspense>} />
-        <Route path="/workspace" element={<Workspace />} />
+        <Route path="/workspace" element={<Suspense fallback={<RouteLoadingFallback />}><Workspace /></Suspense>} />
       </Route>
       <Route path="/login" element={<Navigate to="/" />} />
       {/* Legacy redirects */}

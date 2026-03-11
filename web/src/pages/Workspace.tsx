@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../lib/api';
 import {
@@ -96,7 +96,7 @@ function simpleMarkdown(md: string): string {
   return html;
 }
 
-export default function Workspace() {
+function WorkspacePage() {
   const { t } = useI18n();
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
   const modern = uiMode === 'modern';
@@ -511,3 +511,5 @@ export default function Workspace() {
     </div>
   );
 }
+
+export default memo(WorkspacePage);

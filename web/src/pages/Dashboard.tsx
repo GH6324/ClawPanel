@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../lib/api';
 import {
@@ -11,18 +11,12 @@ import { useI18n } from '../i18n';
 import { resolveOpenClawRuntime } from '../lib/openclawRuntime';
 
 interface DashboardProps {
-  ws: {
-    events: any[];
-    logEntries: LogEntry[];
-    napcatStatus: any;
-    wechatStatus: any;
-    clearEvents: () => void;
-    refreshLog: () => void;
-  };
+  logEntries: LogEntry[];
+  refreshLog: () => void;
 }
 
-export default function Dashboard({ ws }: DashboardProps) {
-  const { t, locale } = useI18n();
+function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
+  const { t } = useI18n();
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
   const modern = uiMode === 'modern';
   const [status, setStatus] = useState<any>(null);
@@ -38,7 +32,7 @@ export default function Dashboard({ ws }: DashboardProps) {
 
   useEffect(() => {
     if (autoScroll && logRef.current) logRef.current.scrollTop = 0;
-  }, [ws.logEntries.length, autoScroll]);
+  }, [logEntries.length, autoScroll]);
 
   const nc = status?.napcat || {};
   const wc = status?.wechat || {};
@@ -55,12 +49,17 @@ export default function Dashboard({ ws }: DashboardProps) {
         ? 'red'
         : 'amber';
 
-  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  const filteredLogs = ws.logEntries.filter(e => !isNoiseEvent(e));
-  const todayLogs = filteredLogs.filter(e => e.time >= todayStart.getTime());
-  const messageLogs = todayLogs.filter(e => e.source !== 'system');
-  const inboundCount = messageLogs.filter(e => e.source === 'qq' || e.source === 'wechat').length;
-  const botCount = messageLogs.filter(e => e.source === 'openclaw').length;
+  const filteredLogs = useMemo(
+    () => logEntries.filter(entry => !isNoiseEvent(entry)),
+    [logEntries],
+  );
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayLogs = filteredLogs.filter(entry => entry.time >= todayStart.getTime());
+  const messageLogs = todayLogs.filter(entry => entry.source !== 'system');
+  const messageLogCount = messageLogs.length;
+  const inboundCount = messageLogs.filter(entry => entry.source === 'qq' || entry.source === 'wechat').length;
+  const botCount = messageLogs.filter(entry => entry.source === 'openclaw').length;
   const getExpandableContent = (entry: LogEntry) => entry.detail?.trim() || entry.summary?.trim() || '';
 
   // Build connected channels dynamically from enabledChannels returned by /api/status
@@ -184,7 +183,7 @@ export default function Dashboard({ ws }: DashboardProps) {
           color="text-blue-600" bg="bg-blue-50 dark:bg-blue-900/20" modern={modern} />
         <StatCard icon={MemoryStick} label={t.dashboard.memory} value={`${adm.memoryMB || 0}`} unit="MB"
           color="text-cyan-600" bg="bg-cyan-50 dark:bg-cyan-900/20" modern={modern} />
-        <StatCard icon={TrendingUp} label={t.dashboard.todayMessages} value={`${messageLogs.length}`} unit={t.dashboard.msgUnit || undefined}
+        <StatCard icon={TrendingUp} label={t.dashboard.todayMessages} value={`${messageLogCount}`} unit={t.dashboard.msgUnit || undefined}
           sub={`${t.dashboard.received} ${inboundCount} / ${t.dashboard.sent} ${botCount}`} color="text-amber-600" bg="bg-amber-50 dark:bg-amber-900/20" modern={modern} />
         {modern && (
           <StatCard icon={Users} label={t.dashboard.connectedChannels} value={`${connectedChannels.filter(c => c.status === t.common.connected).length}`} unit={t.dashboard.channelUnit || undefined}
@@ -244,7 +243,7 @@ export default function Dashboard({ ws }: DashboardProps) {
               className={`p-2 rounded-xl transition-all ${autoScroll ? 'bg-blue-50/80 text-blue-600 shadow-sm ring-1 ring-blue-100 dark:bg-blue-900/20 dark:ring-blue-800/40 dark:text-blue-300' : 'text-gray-400 hover:bg-white/70 dark:hover:bg-slate-800/70'}`}>
               <ArrowDown size={14} />
             </button>
-              <button onClick={ws.refreshLog} title={t.dashboard.refreshLog} className="p-2 rounded-xl hover:bg-white/70 dark:hover:bg-slate-800/70 text-gray-400 transition-colors">
+              <button onClick={refreshLog} title={t.dashboard.refreshLog} className="p-2 rounded-xl hover:bg-white/70 dark:hover:bg-slate-800/70 text-gray-400 transition-colors">
                 <RefreshCw size={14} />
               </button>
           </div>
@@ -365,3 +364,5 @@ function formatUptime(s: number, t: any) {
 function isNoiseEvent(entry: { source: string; type: string; summary: string }) {
   return entry.source === 'qq' && entry.type === 'notice.notify';
 }
+
+export default memo(DashboardPage);

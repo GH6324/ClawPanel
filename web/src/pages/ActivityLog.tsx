@@ -1,18 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Search, Trash2, ArrowDown, RefreshCw, Download, Filter, MessageSquare } from 'lucide-react';
 import type { LogEntry } from '../hooks/useWebSocket';
 import { useI18n } from '../i18n';
 
 interface Props {
-  ws: {
-    events: any[];
-    logEntries: LogEntry[];
-    napcatStatus: any;
-    wechatStatus: any;
-    clearEvents: () => void;
-    refreshLog: () => void;
-  };
+  logEntries: LogEntry[];
+  clearEvents: () => void;
+  refreshLog: () => void;
 }
 
 type MessageRole = 'user' | 'bot' | 'system';
@@ -39,7 +34,7 @@ interface ConversationGroup {
   counts: Record<MessageRole, number>;
 }
 
-export default function ActivityLog({ ws }: Props) {
+function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
   const { t } = useI18n();
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
   const modern = uiMode === 'modern';
@@ -49,7 +44,7 @@ export default function ActivityLog({ ws }: Props) {
   const [autoScroll, setAutoScroll] = useState(true);
   const [selectedConversation, setSelectedConversation] = useState('');
 
-  const parsedEntries = useMemo(() => ws.logEntries.map(parseEntry), [ws.logEntries]);
+  const parsedEntries = useMemo(() => logEntries.map(parseEntry), [logEntries]);
 
   const filteredEntries = useMemo(() => parsedEntries.filter(entry => {
     if (sourceFilter && entry.source !== sourceFilter && entry.channel !== sourceFilter) return false;
@@ -106,10 +101,10 @@ export default function ActivityLog({ ws }: Props) {
 
   const activeConversation = conversations.find(item => item.key === selectedConversation) || null;
 
-  const sourceCounts = ws.logEntries.reduce((acc, entry) => {
+  const sourceCounts = useMemo(() => logEntries.reduce((acc, entry) => {
     acc[entry.source] = (acc[entry.source] || 0) + 1;
     return acc;
-  }, {} as Record<string, number>);
+  }, {} as Record<string, number>), [logEntries]);
 
   const handleExport = () => {
     const lines = filteredEntries.map(entry => `[${new Date(entry.time).toLocaleString()}] [${entry.channel}] [${roleLabel(entry.role)}] ${entry.text}`);
@@ -145,8 +140,8 @@ export default function ActivityLog({ ws }: Props) {
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => setAutoScroll(!autoScroll)} className={`p-2 rounded-lg transition-all ${autoScroll ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-100' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`} title={autoScroll ? t.dashboard.pauseScroll : t.dashboard.resumeScroll}><ArrowDown size={14} /></button>
-              <button onClick={ws.refreshLog} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 transition-colors" title={t.common.refresh}><RefreshCw size={14} /></button>
-              <button onClick={ws.clearEvents} className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors" title={t.activityLog.clear}><Trash2 size={14} /></button>
+              <button onClick={refreshLog} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 transition-colors" title={t.common.refresh}><RefreshCw size={14} /></button>
+              <button onClick={clearEvents} className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors" title={t.activityLog.clear}><Trash2 size={14} /></button>
             </div>
           </div>
 
@@ -158,7 +153,7 @@ export default function ActivityLog({ ws }: Props) {
 
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide">
               {[
-                { key: '', label: t.common.all, count: ws.logEntries.length },
+                { key: '', label: t.common.all, count: logEntries.length },
                 { key: 'qq', label: 'QQ', count: sourceCounts.qq || 0 },
                 { key: 'wecom', label: '企微', count: sourceCounts.wecom || 0 },
                 { key: 'feishu', label: '飞书', count: sourceCounts.feishu || 0 },
@@ -379,3 +374,5 @@ function formatLogTime(ts: number) {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+
+export default memo(ActivityLogPage);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../lib/api';
 import {
@@ -41,7 +41,7 @@ function resolveSessionMode(job: CronJob): string {
 
 type ScheduleKind = 'cron' | 'every' | 'at';
 
-export default function CronJobs() {
+function CronJobsPage() {
   const { t, locale } = useI18n();
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
   const modern = uiMode === 'modern';
@@ -484,3 +484,5 @@ export default function CronJobs() {
     </div>
   );
 }
+
+export default memo(CronJobsPage);

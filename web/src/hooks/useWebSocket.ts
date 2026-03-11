@@ -20,7 +20,6 @@ function demoToLogEntry(d: any): LogEntry {
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
-  const [events, setEvents] = useState<any[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [napcatStatus, setNapcatStatus] = useState<any>(IS_DEMO ? DEMO_NAPCAT_STATUS : { connected: false });
   const [wechatStatus, setWechatStatus] = useState<any>(IS_DEMO ? DEMO_WECHAT_STATUS : { connected: false });
@@ -128,9 +127,7 @@ export function useWebSocket() {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'event' || msg.type === 'wechat-event') {
-            setEvents(prev => { const next = [...prev, { ...msg.data, _source: msg.type === 'wechat-event' ? 'wechat' : 'qq' }]; return next.length > 200 ? next.slice(-200) : next; });
-          } else if (msg.type === 'log-entry') {
+          if (msg.type === 'log-entry') {
             setLogEntries(prev => {
               const next = [msg.data, ...prev];
               return next.length > 500 ? next.slice(0, 500) : next;
@@ -166,7 +163,6 @@ export function useWebSocket() {
   }, []);
 
   const clearEvents = useCallback(() => {
-    setEvents([]);
     setLogEntries([]);
     api.clearEvents().catch(() => {});
   }, []);
@@ -180,5 +176,5 @@ export function useWebSocket() {
     }).catch(() => {});
   }, []);
 
-  return { events, logEntries, napcatStatus, wechatStatus, openclawStatus, processStatus, wsMessages, clearEvents, refreshLog };
+  return { logEntries, napcatStatus, wechatStatus, openclawStatus, processStatus, wsMessages, clearEvents, refreshLog };
 }

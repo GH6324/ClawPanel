@@ -670,88 +670,88 @@ html.dark .page-modern-danger {
   color: #fecaca;
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] {
+.ui-modern-shell[data-ui-perf='reduced'] {
   --ui-panel: rgba(255, 255, 255, 0.94);
   --ui-panel-strong: rgba(255, 255, 255, 0.98);
 }
 
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] {
+html.dark .ui-modern-shell[data-ui-perf='reduced'] {
   --ui-panel: rgba(12, 24, 42, 0.9);
   --ui-panel-strong: rgba(10, 20, 36, 0.96);
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] [class*='backdrop-blur'] {
+.ui-modern-shell[data-ui-perf='reduced'] [class*='backdrop-blur'] {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-panel,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-card,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-panel,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-action,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-accent,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-control,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-success,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-warn,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-danger,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .dark\:bg-gray-800,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .dark\:bg-gray-900,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/70,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/75,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/80,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/85,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/90,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .bg-white\/95 {
+.ui-modern-shell[data-ui-perf='reduced'] .ui-modern-panel,
+.ui-modern-shell[data-ui-perf='reduced'] .ui-modern-card,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-panel,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-action,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-accent,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-control,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-success,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-warn,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-danger,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .dark\:bg-gray-800,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .dark\:bg-gray-900,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/70,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/75,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/80,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/85,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/90,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .bg-white\/95 {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-panel,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-panel {
+.ui-modern-shell[data-ui-perf='reduced'] .ui-modern-panel,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-panel {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05) !important;
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-card,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-action,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-accent,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-control,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-success,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-warn,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-danger,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-sm,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-md,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-xl,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-2xl,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] [class*='shadow-['] {
+.ui-modern-shell[data-ui-perf='reduced'] .ui-modern-card,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-action,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-accent,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-control,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-success,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-warn,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern-danger,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
+.ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
+.ui-modern-shell[data-ui-perf='reduced'] .shadow-sm,
+.ui-modern-shell[data-ui-perf='reduced'] .shadow-md,
+.ui-modern-shell[data-ui-perf='reduced'] .shadow-xl,
+.ui-modern-shell[data-ui-perf='reduced'] .shadow-2xl,
+.ui-modern-shell[data-ui-perf='reduced'] [class*='shadow-['] {
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06) !important;
 }
 
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-panel,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-panel,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .ui-modern-card,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-action,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-accent,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-control,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-success,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-warn,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern-danger,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-sm,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-md,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-xl,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] .shadow-2xl,
-html.dark body[data-ui-mode='modern'][data-ui-perf='reduced'] [class*='shadow-['] {
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .ui-modern-panel,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-panel,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .ui-modern-card,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-action,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-accent,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-control,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-success,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-warn,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern-danger,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-toolbar,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .page-modern .page-modern-header > .page-modern-toolbar,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .shadow-sm,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .shadow-md,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .shadow-xl,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] .shadow-2xl,
+html.dark .ui-modern-shell[data-ui-perf='reduced'] [class*='shadow-['] {
   box-shadow: 0 8px 22px rgba(2, 6, 23, 0.22) !important;
 }
 
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .animate-ping,
-body[data-ui-mode='modern'][data-ui-perf='reduced'] .animate-pulse {
+.ui-modern-shell[data-ui-perf='reduced'] .animate-ping,
+.ui-modern-shell[data-ui-perf='reduced'] .animate-pulse {
   animation: none !important;
 }
 

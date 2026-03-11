@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../lib/api';
-import { MessageSquare, Trash2, ChevronLeft, Clock, User, Bot, Loader2, RefreshCw, Search, Hash } from 'lucide-react';
+import { MessageSquare, Trash2, ChevronLeft, Clock, User, Bot, Loader2, RefreshCw, Search, Hash, CircleAlert } from 'lucide-react';
 import MobileActionTray from '../components/MobileActionTray';
 
 interface SessionInfo {
@@ -33,7 +33,13 @@ function getMessageSide(role?: string): MessageSide {
   return 'assistant';
 }
 
-export default function Sessions() {
+function formatSessionRequestError(error?: string, fallback = '操作失败，请稍后重试'): string {
+  if (error === 'ambiguous session') return '会话标识存在歧义，请先切换到具体智能体后再试。';
+  if (error === 'not found') return '目标会话不存在或已被删除，请刷新列表后重试。';
+  return error ? `请求失败：${error}` : fallback;
+}
+
+function SessionsPage() {
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
   const modern = uiMode === 'modern';
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -41,28 +47,81 @@ export default function Sessions() {
   const [selectedAgent, setSelectedAgent] = useState('');
   const [defaultAgent, setDefaultAgent] = useState('main');
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState('');
   const [selected, setSelected] = useState<SessionInfo | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [msgLoading, setMsgLoading] = useState(false);
+  const [messageError, setMessageError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
   const [search, setSearch] = useState('');
+  const sessionsRequestRef = useRef(0);
+  const messageRequestRef = useRef(0);
+  const selectedRef = useRef<SessionInfo | null>(null);
 
   const getSessionIdentity = (session: SessionInfo, selectedAgentValue = selectedAgent) => {
     const effectiveAgent = session.agentId || (selectedAgentValue === 'all' ? defaultAgent : selectedAgentValue) || defaultAgent || 'main';
-    return `${effectiveAgent}:${session.sessionId}`;
+    const sessionToken = session.sessionId || session.key || session.originFrom || session.lastTo || `${session.lastChannel || 'unknown'}:${session.chatType || 'session'}`;
+    return `${effectiveAgent}:${sessionToken}`;
+  };
+
+  const invalidateMessageRequest = () => {
+    messageRequestRef.current += 1;
+  };
+
+  const invalidateSessionsRequest = () => {
+    sessionsRequestRef.current += 1;
+  };
+
+  const setSelectedSession = (session: SessionInfo | null) => {
+    selectedRef.current = session;
+    setSelected(session);
+  };
+
+  const clearSelectedSession = () => {
+    invalidateMessageRequest();
+    setSelectedSession(null);
+    setMessages([]);
+    setMessageError('');
   };
 
   const loadSessions = async () => {
+    const requestId = sessionsRequestRef.current + 1;
+    sessionsRequestRef.current = requestId;
     if (!selectedAgent) {
       setSessions([]);
       setLoading(false);
+      setListError('');
+      clearSelectedSession();
       return;
     }
     setLoading(true);
+    setListError('');
     try {
       const r = await api.getSessions(selectedAgent);
-      if (r.ok) setSessions(r.sessions || []);
-    } catch {}
-    finally { setLoading(false); }
+      if (sessionsRequestRef.current !== requestId) return;
+      if (!r.ok || r.error) {
+        setSessions([]);
+        clearSelectedSession();
+        setListError(formatSessionRequestError(r.error, '加载会话列表失败，请稍后重试。'));
+      } else {
+        const nextSessions = r.sessions || [];
+        setSessions(nextSessions);
+        const currentSelected = selectedRef.current;
+        if (currentSelected) {
+          const selectedIdentity = getSessionIdentity(currentSelected);
+          const stillExists = nextSessions.some((session: SessionInfo) => getSessionIdentity(session) === selectedIdentity);
+          if (!stillExists) clearSelectedSession();
+        }
+      }
+    } catch {
+      if (sessionsRequestRef.current !== requestId) return;
+      setSessions([]);
+      clearSelectedSession();
+      setListError('加载会话列表失败，请稍后重试。');
+    }
+    finally {
+      if (sessionsRequestRef.current === requestId) setLoading(false);
+    }
   };
 
   const loadAgents = async () => {
@@ -99,36 +158,54 @@ export default function Sessions() {
 
   useEffect(() => {
     loadSessions();
-    setSelected(null);
-    setMessages([]);
+    clearSelectedSession();
+    setDeleteError('');
   }, [selectedAgent]);
 
   const loadMessages = async (s: SessionInfo) => {
-    setSelected(s);
+    const requestId = messageRequestRef.current + 1;
+    messageRequestRef.current = requestId;
+    setSelectedSession(s);
     setMsgLoading(true);
     setMessages([]);
+    setMessageError('');
     try {
       const targetAgent = s.agentId || (selectedAgent === 'all' ? defaultAgent : selectedAgent);
       const r = await api.getSessionDetail(s.sessionId, targetAgent);
-      if (r.ok) setMessages(r.messages || []);
-    } catch {}
-    finally { setMsgLoading(false); }
+      if (messageRequestRef.current !== requestId) return;
+      if (!r.ok || r.error) {
+        setMessageError(formatSessionRequestError(r.error, '加载消息失败，请稍后重试。'));
+      } else {
+        setMessages(r.messages || []);
+      }
+    } catch {
+      if (messageRequestRef.current !== requestId) return;
+      setMessageError('加载消息失败，请稍后重试。');
+    }
+    finally {
+      if (messageRequestRef.current === requestId) setMsgLoading(false);
+    }
   };
 
   const handleDelete = async (s: SessionInfo) => {
     if (!confirm(`确定删除会话 "${s.originLabel || s.key}"？此操作不可恢复。`)) return;
+    setDeleteError('');
     try {
       const targetAgent = s.agentId || (selectedAgent === 'all' ? defaultAgent : selectedAgent);
       const r = await api.deleteSession(s.sessionId, targetAgent);
       if (r.ok) {
+        invalidateSessionsRequest();
         const targetIdentity = getSessionIdentity(s);
         setSessions(prev => prev.filter(x => getSessionIdentity(x) !== targetIdentity));
-        if (selected && getSessionIdentity(selected) === targetIdentity) {
-          setSelected(null);
-          setMessages([]);
+        if (selectedRef.current && getSessionIdentity(selectedRef.current) === targetIdentity) {
+          clearSelectedSession();
         }
+      } else {
+        setDeleteError(formatSessionRequestError(r.error, '删除会话失败，请稍后重试。'));
       }
-    } catch {}
+    } catch {
+      setDeleteError('删除会话失败，请稍后重试。');
+    }
   };
 
   const formatTime = (ms: number) => {
@@ -183,6 +260,13 @@ export default function Sessions() {
         </MobileActionTray>
       </div>
 
+      {deleteError && (
+        <div className={`${modern ? 'page-modern-panel border border-red-100/80 dark:border-red-900/40 text-red-600 dark:text-red-300 px-4 py-3 text-xs flex items-start gap-2' : 'rounded-xl border border-red-100 dark:border-red-900/40 bg-red-50/80 dark:bg-red-900/10 text-red-600 dark:text-red-300 px-4 py-3 text-xs flex items-start gap-2'}`}>
+          <CircleAlert size={14} className="mt-0.5 shrink-0" />
+          <span>{deleteError}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Session list */}
         <div className={`${modern ? 'page-modern-panel flex flex-col max-h-[75vh] overflow-hidden' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 flex flex-col max-h-[75vh] overflow-hidden'}`}>
@@ -196,6 +280,12 @@ export default function Sessions() {
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索会话..."
                 className={`w-full pl-8 pr-3 py-1.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900 focus:outline-none transition-all ${modern ? 'border-transparent bg-transparent dark:bg-transparent focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500' : 'focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500'}`} />
             </div>
+            {listError && (
+              <div className={`${modern ? 'rounded-xl border border-red-100/80 dark:border-red-900/40 text-red-600 dark:text-red-300 px-3 py-2 text-[11px] flex items-start gap-2 bg-red-50/60 dark:bg-red-900/10' : 'rounded-lg border border-red-100 dark:border-red-900/40 bg-red-50/80 dark:bg-red-900/10 text-red-600 dark:text-red-300 px-3 py-2 text-[11px] flex items-start gap-2'}`}>
+                <CircleAlert size={13} className="mt-0.5 shrink-0" />
+                <span>{listError}</span>
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {loading ? (
@@ -207,15 +297,25 @@ export default function Sessions() {
                 <MessageSquare size={24} className="mb-2 opacity-30" />
                 <p className="text-xs">{search ? '无匹配会话' : '暂无会话'}</p>
               </div>
-            ) : filtered.map(s => (
-              <button key={getSessionIdentity(s)} onClick={() => loadMessages(s)}
+            ) : filtered.map(s => {
+              const sessionIdentity = getSessionIdentity(s);
+              const isSelected = selected ? getSessionIdentity(selected) === sessionIdentity : false;
+
+              return (
+              <div key={sessionIdentity} role="button" tabIndex={0} onClick={() => loadMessages(s)} onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  loadMessages(s);
+                }
+              }}
                 className={`w-full text-left px-3 py-2.5 rounded-xl transition-all duration-200 group border border-transparent ${
-                  selected ? getSessionIdentity(selected) === getSessionIdentity(s) : false
+                  isSelected
                     ? 'bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(219,234,254,0.68))] dark:bg-[linear-gradient(145deg,rgba(30,64,175,0.2),rgba(10,20,36,0.82))] border-blue-100/80 dark:border-blue-800/40 shadow-sm shadow-blue-100/40 dark:shadow-none'
                     : 'hover:bg-white/70 dark:hover:bg-gray-700/50 hover:border-blue-100/70 dark:hover:border-blue-800/30'
                 }`}>
                 <div className="flex items-start gap-2.5">
-                  <div className={`p-1.5 rounded-xl mt-0.5 shrink-0 border ${selected && getSessionIdentity(selected) === getSessionIdentity(s) ? 'bg-blue-100/80 dark:bg-blue-900/30 border-blue-100 dark:border-blue-800/40 text-blue-600 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-500'}`}>
+                  <div className={`p-1.5 rounded-xl mt-0.5 shrink-0 border ${isSelected ? 'bg-blue-100/80 dark:bg-blue-900/30 border-blue-100 dark:border-blue-800/40 text-blue-600 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-500'}`}>
                     <MessageSquare size={14} />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -243,13 +343,17 @@ export default function Sessions() {
                       </span>
                     </div>
                   </div>
-                  <button onClick={e => { e.stopPropagation(); handleDelete(s); }}
-                    className={`${modern ? 'page-modern-danger p-1.5 opacity-0 group-hover:opacity-100 transition-all shrink-0' : 'p-1 rounded opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all shrink-0'}`}>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDelete(s); }}
+                    onKeyDown={e => { e.stopPropagation(); }}
+                    aria-label={`删除会话 ${s.originLabel || s.key || s.sessionId}`}
+                    className={`${modern ? 'page-modern-danger p-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-all shrink-0' : 'p-1 rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all shrink-0'}`}>
                     <Trash2 size={12} />
                   </button>
                 </div>
-              </button>
-            ))}
+              </div>
+            );
+            })}
           </div>
         </div>
 
@@ -264,7 +368,7 @@ export default function Sessions() {
           ) : (
             <>
               <div className={`${modern ? 'px-5 py-3 border-b border-blue-100/60 dark:border-slate-700/50 flex items-center gap-3 bg-[linear-gradient(145deg,rgba(255,255,255,0.34),rgba(239,246,255,0.22))] dark:bg-[linear-gradient(145deg,rgba(10,20,36,0.36),rgba(30,64,175,0.08))] backdrop-blur-xl shrink-0' : 'px-5 py-3 border-b border-gray-100 dark:border-gray-700/50 flex items-center gap-3 bg-gray-50/50 dark:bg-gray-800/50 shrink-0'}`}>
-                <button onClick={() => { setSelected(null); setMessages([]); }} className={`${modern ? 'page-modern-action p-1.5 lg:hidden' : 'lg:hidden p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
+                <button onClick={() => { clearSelectedSession(); }} className={`${modern ? 'page-modern-action p-1.5 lg:hidden' : 'lg:hidden p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
                   <ChevronLeft size={18} />
                 </button>
                 <div className="p-2 rounded-xl border border-blue-100/80 dark:border-blue-800/40 bg-blue-100/80 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300">
@@ -284,6 +388,17 @@ export default function Sessions() {
                 {msgLoading ? (
                   <div className="flex items-center justify-center py-12 text-gray-400">
                     <Loader2 size={20} className="animate-spin" />
+                  </div>
+                ) : messageError ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-red-500 dark:text-red-300">
+                    <CircleAlert size={24} className="mb-2 opacity-80" />
+                    <p className="text-xs font-medium">{messageError}</p>
+                    <button
+                      onClick={() => loadMessages(selected)}
+                      className={`${modern ? 'page-modern-action mt-3 px-3 py-1.5 text-xs font-medium' : 'mt-3 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300'}`}
+                    >
+                      重试
+                    </button>
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-gray-400">
@@ -325,3 +440,5 @@ export default function Sessions() {
     </div>
   );
 }
+
+export default memo(SessionsPage);

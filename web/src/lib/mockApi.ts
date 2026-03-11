@@ -181,11 +181,203 @@ const FAKE_WORKFLOW_RUNS = [
   { id: 'run-2', templateId: 'tpl-2', templateName: '代码审查', status: 'running', startedAt: Date.now() - 600000, steps: [{ key: 'diff', status: 'completed' }, { key: 'review', status: 'running' }] },
 ];
 
-const FAKE_SESSIONS = [
-  { id: 'sess-1', agentId: 'main', type: 'dm', peer: 'ou_demo_a', messageCount: 24, createdAt: Date.now() - 86400000, lastMessageAt: Date.now() - 3600000 },
-  { id: 'sess-2', agentId: 'main', type: 'group', peer: 'oc_demo_group', messageCount: 8, createdAt: Date.now() - 172800000, lastMessageAt: Date.now() - 7200000 },
-  { id: 'sess-3', agentId: 'work', type: 'dm', peer: 'ou_demo_b', messageCount: 15, createdAt: Date.now() - 259200000, lastMessageAt: Date.now() - 86400000 },
+const INITIAL_FAKE_SESSIONS = [
+  { key: 'main:sess-1', sessionId: 'sess-1', agentId: 'main', chatType: 'direct', lastChannel: 'qq', lastTo: 'ou_demo_a', updatedAt: Date.now() - 3600000, originLabel: '演示私聊 A', originProvider: 'qq', originFrom: 'ou_demo_a', messageCount: 24 },
+  { key: 'main:sess-2', sessionId: 'sess-2', agentId: 'main', chatType: 'group', lastChannel: 'qq', lastTo: 'oc_demo_group', updatedAt: Date.now() - 7200000, originLabel: '演示群聊', originProvider: 'qq', originFrom: 'oc_demo_group', messageCount: 8 },
+  { key: 'work:sess-3', sessionId: 'sess-3', agentId: 'work', chatType: 'direct', lastChannel: 'wechat', lastTo: 'ou_demo_b', updatedAt: Date.now() - 86400000, originLabel: '工作助手会话', originProvider: 'wechat', originFrom: 'ou_demo_b', messageCount: 15 },
 ];
+type FakeSession = (typeof INITIAL_FAKE_SESSIONS)[number];
+type FakeSessionMessage = { id: string; role: string; content: string; timestamp: string };
+
+const INITIAL_FAKE_SESSION_MESSAGES: Record<string, FakeSessionMessage[]> = {
+  'main:sess-1': [
+    { id: 'sess-1-u1', role: 'user', content: '今天有什么要注意的消息？', timestamp: new Date(Date.now() - 120000).toISOString() },
+    { id: 'sess-1-a1', role: 'assistant', content: '今天的重点是模型额度、水位监控和日报提醒。', timestamp: new Date(Date.now() - 115000).toISOString() },
+  ],
+  'main:sess-2': [
+    { id: 'sess-2-u1', role: 'user', content: '帮我整理一下今天的 AI 新闻。', timestamp: new Date(Date.now() - 240000).toISOString() },
+    { id: 'sess-2-a1', role: 'assistant', content: '已整理成 3 条摘要，分别是模型发布、融资和产品更新。', timestamp: new Date(Date.now() - 230000).toISOString() },
+  ],
+  'work:sess-3': [
+    { id: 'sess-3-u1', role: 'user', content: '请生成本周工作总结。', timestamp: new Date(Date.now() - 3600000).toISOString() },
+    { id: 'sess-3-a1', role: 'assistant', content: '已根据本周会话记录生成总结草稿。', timestamp: new Date(Date.now() - 3540000).toISOString() },
+  ],
+};
+
+const LEGACY_DEMO_SESSIONS_STORAGE_KEY = 'clawpanel-demo-sessions-v1';
+const LEGACY_DEMO_SESSION_MESSAGES_STORAGE_KEY = 'clawpanel-demo-session-messages-v1';
+const DEMO_SESSIONS_STORAGE_KEY = 'clawpanel-demo-sessions-v2';
+const DEMO_SESSION_MESSAGES_STORAGE_KEY = 'clawpanel-demo-session-messages-v2';
+
+function cloneDemoState<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function loadDemoState<T>(keys: string[], fallback: T, normalize?: (value: unknown) => T | null): T {
+  if (typeof window === 'undefined') return cloneDemoState(fallback);
+  for (const key of keys) {
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!normalize) return parsed as T;
+      const normalized = normalize(parsed);
+      if (normalized !== null) return normalized;
+    } catch {}
+  }
+  return cloneDemoState(fallback);
+}
+
+function saveDemoState(key: string, value: unknown) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+function getFakeSessionIdentity(agentId: string | undefined, sessionId: string) {
+  return `${agentId || 'main'}:${sessionId}`;
+}
+
+function normalizeDemoEpoch(value: number): number {
+  return Math.abs(value) < 1e11 ? value * 1000 : value;
+}
+
+function normalizeDemoTimestampMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return normalizeDemoEpoch(value);
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const numericTimestamp = Number(raw);
+    return Number.isFinite(numericTimestamp) ? normalizeDemoEpoch(numericTimestamp) : null;
+  }
+  const parsedTimestamp = Date.parse(raw);
+  return Number.isNaN(parsedTimestamp) ? null : parsedTimestamp;
+}
+
+function normalizeDemoChatType(value: unknown): FakeSession['chatType'] | null {
+  if (value === 'direct' || value === 'group') return value;
+  if (value === 'dm') return 'direct';
+  return null;
+}
+
+function normalizeDemoSession(value: unknown): FakeSession | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const sessionId = String(raw.sessionId ?? raw.id ?? '').trim();
+  const agentId = String(raw.agentId ?? 'main').trim() || 'main';
+  const chatType = normalizeDemoChatType(raw.chatType ?? raw.type);
+  if (!sessionId || !chatType) return null;
+
+  const lastChannel = String(raw.lastChannel ?? raw.channel ?? raw.originProvider ?? '').trim();
+  const lastTo = String(raw.lastTo ?? raw.peer ?? raw.originFrom ?? '').trim();
+  const originFrom = String(raw.originFrom ?? lastTo).trim();
+  const updatedAt = normalizeDemoTimestampMs(raw.updatedAt ?? raw.lastMessageAt) ?? Date.now();
+  const messageCountRaw = Number(raw.messageCount ?? 0);
+  const messageCount = Number.isFinite(messageCountRaw) && messageCountRaw >= 0 ? messageCountRaw : 0;
+  const originLabel = String(raw.originLabel ?? raw.title ?? lastTo ?? sessionId).trim() || sessionId;
+  const originProvider = String(raw.originProvider ?? lastChannel).trim();
+  const key = String(raw.key ?? getFakeSessionIdentity(agentId, sessionId)).trim() || getFakeSessionIdentity(agentId, sessionId);
+
+  return {
+    key,
+    sessionId,
+    agentId,
+    chatType,
+    lastChannel,
+    lastTo,
+    updatedAt,
+    originLabel,
+    originProvider,
+    originFrom,
+    messageCount,
+  };
+}
+
+function normalizeDemoSessions(value: unknown): FakeSession[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .map(item => normalizeDemoSession(item))
+    .filter((item): item is FakeSession => item !== null);
+  if (value.length > 0 && normalized.length === 0) return null;
+  return normalized;
+}
+
+function normalizeDemoSessionMessage(value: unknown): FakeSessionMessage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const content = String(raw.content ?? '').trim();
+  const timestampMs = normalizeDemoTimestampMs(raw.timestamp);
+  const timestamp = timestampMs === null ? '' : new Date(timestampMs).toISOString();
+  if (!content || !timestamp) return null;
+  const role = String(raw.role ?? 'assistant').trim() || 'assistant';
+  const id = String(raw.id ?? '').trim() || `${timestamp}:${role}:${content}`;
+  return {
+    id,
+    role,
+    content,
+    timestamp,
+  };
+}
+
+function normalizeDemoSessionMessages(value: unknown, sessions: FakeSession[]): Record<string, FakeSessionMessage[]> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sourceEntries = Object.entries(value as Record<string, unknown>);
+  const sessionIdCounts = new Map<string, number>();
+  for (const session of sessions) {
+    sessionIdCounts.set(session.sessionId, (sessionIdCounts.get(session.sessionId) || 0) + 1);
+  }
+  const keyAliases = new Map<string, string>();
+  for (const session of sessions) {
+    const canonicalKey = getFakeSessionIdentity(session.agentId, session.sessionId);
+    keyAliases.set(canonicalKey, canonicalKey);
+    if (session.key) keyAliases.set(session.key, canonicalKey);
+    if ((sessionIdCounts.get(session.sessionId) || 0) === 1) {
+      keyAliases.set(session.sessionId, canonicalKey);
+    }
+  }
+
+  const validKeys = new Set(sessions.map(session => getFakeSessionIdentity(session.agentId, session.sessionId)));
+  const normalized: Record<string, FakeSessionMessage[]> = {};
+  for (const [key, rawMessages] of sourceEntries) {
+    const canonicalKey = keyAliases.get(key);
+    if (!canonicalKey || !validKeys.has(canonicalKey) || !Array.isArray(rawMessages)) continue;
+    const nextMessages = rawMessages
+      .map(item => normalizeDemoSessionMessage(item))
+      .filter((item): item is FakeSessionMessage => item !== null);
+    normalized[canonicalKey] = [...(normalized[canonicalKey] || []), ...nextMessages];
+  }
+  if (sourceEntries.length > 0 && Object.keys(normalized).length === 0) return null;
+  for (const [canonicalKey, messages] of Object.entries(normalized)) {
+    const deduped = new Map<string, FakeSessionMessage>();
+    for (const message of messages) {
+      const fallbackKey = `${message.timestamp}:${message.role}:${message.content}`;
+      const dedupeKey = message.id || fallbackKey;
+      if (!deduped.has(dedupeKey)) deduped.set(dedupeKey, message);
+    }
+    normalized[canonicalKey] = Array.from(deduped.values()).sort(
+      (left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp),
+    );
+  }
+  return normalized;
+}
+
+let fakeSessions: FakeSession[] = loadDemoState(
+  [DEMO_SESSIONS_STORAGE_KEY, LEGACY_DEMO_SESSIONS_STORAGE_KEY],
+  INITIAL_FAKE_SESSIONS,
+  normalizeDemoSessions,
+);
+let fakeSessionMessages: Record<string, FakeSessionMessage[]> = loadDemoState(
+  [DEMO_SESSION_MESSAGES_STORAGE_KEY, LEGACY_DEMO_SESSION_MESSAGES_STORAGE_KEY],
+  INITIAL_FAKE_SESSION_MESSAGES,
+  value => normalizeDemoSessionMessages(value, fakeSessions),
+);
+saveDemoState(DEMO_SESSIONS_STORAGE_KEY, fakeSessions);
+saveDemoState(DEMO_SESSION_MESSAGES_STORAGE_KEY, fakeSessionMessages);
+
+function findFakeSessionsById(sessionId: string, agentId?: string) {
+  return fakeSessions.filter(item => item.sessionId === sessionId && (!agentId || agentId === 'all' || item.agentId === agentId));
+}
 
 export const mockApi = {
   login: async (_token: string) => { await delay(500); return { ok: true, token: 'demo-token' }; },
@@ -396,9 +588,37 @@ export const mockApi = {
   deleteWorkflowRun: async (_id: string) => { await delay(200); return { ok: true }; },
 
   // --- Sessions ---
-  getSessions: async (_agent?: string) => { await delay(200); const sessions = _agent ? FAKE_SESSIONS.filter(s => s.agentId === _agent) : FAKE_SESSIONS; return { ok: true, sessions: JSON.parse(JSON.stringify(sessions)) }; },
-  getSessionDetail: async (id: string, _agent?: string) => { await delay(150); const s = FAKE_SESSIONS.find(x => x.id === id); return s ? { ok: true, session: { ...s, messages: [{ role: 'user', content: 'Hello', timestamp: Date.now() - 60000 }, { role: 'assistant', content: '你好！有什么可以帮你的？', timestamp: Date.now() - 59000 }] } } : { ok: false, error: 'not found' }; },
-  deleteSession: async (_id: string, _agent?: string) => { await delay(200); return { ok: true }; },
+  getSessions: async (_agent?: string) => {
+    await delay(200);
+    const sessions = !_agent || _agent === 'all'
+      ? fakeSessions
+      : fakeSessions.filter(session => session.agentId === _agent);
+    return { ok: true, sessions: JSON.parse(JSON.stringify(sessions)) };
+  },
+  getSessionDetail: async (id: string, _agent?: string) => {
+    await delay(150);
+    const matches = findFakeSessionsById(id, _agent);
+    if (matches.length === 0) return { ok: false, error: 'not found' };
+    if ((!_agent || _agent === 'all') && matches.length > 1) {
+      return { ok: false, error: 'ambiguous session' };
+    }
+    const session = matches[0];
+    return { ok: true, messages: JSON.parse(JSON.stringify(fakeSessionMessages[getFakeSessionIdentity(session.agentId, id)] || [])) };
+  },
+  deleteSession: async (_id: string, _agent?: string) => {
+    await delay(200);
+    const matches = findFakeSessionsById(_id, _agent);
+    if (matches.length === 0) return { ok: false, error: 'not found' };
+    if ((!_agent || _agent === 'all') && matches.length > 1) {
+      return { ok: false, error: 'ambiguous session' };
+    }
+    const deleted = matches[0];
+    fakeSessions = fakeSessions.filter(item => !(item.sessionId === _id && item.agentId === deleted.agentId));
+    delete fakeSessionMessages[getFakeSessionIdentity(deleted.agentId, _id)];
+    saveDemoState(DEMO_SESSIONS_STORAGE_KEY, fakeSessions);
+    saveDemoState(DEMO_SESSION_MESSAGES_STORAGE_KEY, fakeSessionMessages);
+    return { ok: true };
+  },
 
   // --- Software & OpenClaw Instances ---
   getSoftwareList: async () => { await delay(300); return { ok: true, software: [{ id: 'openclaw', name: 'OpenClaw', version: '4.2.1', installed: true }, { id: 'napcat', name: 'NapCat', version: '2.5.0', installed: true }, { id: 'node', name: 'Node.js', version: 'v20.11.0', installed: true }] }; },

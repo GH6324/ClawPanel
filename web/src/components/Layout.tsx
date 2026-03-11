@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ScrollText, Radio, Sparkles, Clock, Settings,
@@ -50,7 +50,7 @@ function filterVisibleTasks(tasks: TaskInfo[]) {
   return tasks.filter(task => !(task.type === 'workflow_run' && task.status === 'canceled'));
 }
 
-export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawStatus, processStatus, wsMessages }: Props) {
+function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, processStatus, wsMessages }: Props) {
   const { t, locale, setLocale } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
@@ -113,7 +113,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     }
   }, [wsMessages]);
 
-  const navItems = [
+  const navItems = useMemo(() => [
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
     { to: '/logs', icon: ScrollText, label: t.nav.activityLog },
     { to: '/channels', icon: Radio, label: t.nav.channels },
@@ -125,15 +125,15 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     { to: '/sessions', icon: MessageSquare, label: '会话管理' },
     { to: '/workspace', icon: FolderOpen, label: t.nav.workspace },
     { to: '/config', icon: Settings, label: t.nav.systemConfig },
-  ];
+  ], [enableAgents, locale, t]);
 
-  const mobileNavItems = [
+  const mobileNavItems = useMemo(() => [
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
     { to: '/channels', icon: Radio, label: t.nav.channels },
     ...(enableAgents ? [{ to: '/agents', icon: Bot, label: locale === 'zh-CN' ? '智能体' : 'Agents' }] : [{ to: '/plugins', icon: Puzzle, label: locale === 'zh-CN' ? '插件' : 'Plugins' }]),
     { to: '/workflows', icon: GitBranch, label: locale === 'zh-CN' ? '工作流' : 'Flows' },
     { to: '/config', icon: Settings, label: t.nav.systemConfig },
-  ];
+  ], [enableAgents, locale, t]);
 
   const [dark, setDark] = useState(() => {
     const s = localStorage.getItem('theme');
@@ -152,13 +152,6 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
       delete document.body.dataset.uiMode;
     };
   }, []);
-
-  useEffect(() => {
-    document.body.dataset.uiPerf = reducedPerfMode ? 'reduced' : 'default';
-    return () => {
-      delete document.body.dataset.uiPerf;
-    };
-  }, [reducedPerfMode]);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -188,7 +181,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN');
   };
 
-  const commandItems = [
+  const commandItems = useMemo(() => [
     { label: '仪表盘', keywords: ['dashboard', 'home', '首页', '仪表盘'], path: '/' },
     { label: '活动日志', keywords: ['log', 'logs', '日志', '活动日志'], path: '/logs' },
     { label: '通道配置 - QQ个人号', keywords: ['qq', 'napcat', 'qq个人号', 'qq personal'], path: '/channels?channel=qq' },
@@ -202,14 +195,14 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     { label: '会话管理', keywords: ['session', 'sessions', '会话'], path: '/sessions' },
     { label: '工作区', keywords: ['workspace', '工作区', '文件'], path: '/workspace' },
     { label: '系统配置', keywords: ['config', 'settings', '系统配置'], path: '/config' },
-  ];
+  ], [enableAgents, locale]);
 
-  const searchResults = searchQuery.trim()
+  const searchResults = useMemo(() => searchQuery.trim()
     ? commandItems.filter(item => {
         const q = searchQuery.toLowerCase();
         return item.label.toLowerCase().includes(q) || item.keywords.some(k => k.toLowerCase().includes(q));
       }).slice(0, 8)
-    : commandItems.slice(0, 6);
+    : commandItems.slice(0, 6), [commandItems, searchQuery]);
 
   const handleSearchGo = (path: string) => {
     navigate(path);
@@ -220,36 +213,41 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
   };
 
   // Build channel list from enabledChannels returned by /api/status
-  const enabledChannels: { id: string; label: string }[] = openclawStatus?.enabledChannels || [];
-  const connectedChannels: { label: string; detail: string; connected: boolean }[] = [];
-  const runtime = resolveOpenClawRuntime(openclawStatus, processStatus);
+  const connectedChannels = useMemo(() => {
+    const enabledChannels: { id: string; label: string }[] = openclawStatus?.enabledChannels || [];
+    const channels: { label: string; detail: string; connected: boolean }[] = [];
+
+    for (const ch of enabledChannels) {
+      if (ch.id === 'qq') {
+        const connected = napcatStatus?.connected;
+        channels.push({
+          label: 'QQ',
+          detail: connected ? `${napcatStatus.nickname || 'QQ'} (${napcatStatus.selfId || ''})` : t.common.notLoggedIn,
+          connected: !!connected,
+        });
+      } else if (ch.id === 'wechat') {
+        channels.push({
+          label: locale === 'zh-CN' ? '微信' : 'WeChat',
+          detail: wechatStatus?.loggedIn ? (wechatStatus.name || t.common.connected) : t.common.notLoggedIn,
+          connected: !!wechatStatus?.loggedIn,
+        });
+      } else {
+        channels.push({ label: ch.label, detail: t.common.enabled, connected: true });
+      }
+    }
+
+    return channels;
+  }, [locale, napcatStatus, openclawStatus, t, wechatStatus]);
+  const runtime = useMemo(() => resolveOpenClawRuntime(openclawStatus, processStatus), [openclawStatus, processStatus]);
   const openClawRestartHint = processStatus?.managedExternally
     ? (locale === 'zh-CN' ? '当前 OpenClaw 由外部进程管理，请改用“网关”按钮或在外部环境中重启。' : 'OpenClaw is managed externally. Use “Gateway” or restart it outside the panel.')
     : processStatus?.daemonized
       ? (locale === 'zh-CN' ? '当前 OpenClaw 以 daemon 模式运行，请改用“网关”按钮重启。' : 'OpenClaw is running in daemon mode. Use “Gateway” to restart it.')
       : '';
   const openClawRestartDisabled = !!openClawRestartHint;
-  for (const ch of enabledChannels) {
-    if (ch.id === 'qq') {
-      const connected = napcatStatus?.connected;
-      connectedChannels.push({
-        label: 'QQ',
-        detail: connected ? `${napcatStatus.nickname || 'QQ'} (${napcatStatus.selfId || ''})` : t.common.notLoggedIn,
-        connected: !!connected,
-      });
-    } else if (ch.id === 'wechat') {
-      connectedChannels.push({
-        label: locale === 'zh-CN' ? '微信' : 'WeChat',
-        detail: wechatStatus?.loggedIn ? (wechatStatus.name || t.common.connected) : t.common.notLoggedIn,
-        connected: !!wechatStatus?.loggedIn,
-      });
-    } else {
-      connectedChannels.push({ label: ch.label, detail: t.common.enabled, connected: true });
-    }
-  }
 
   return (
-    <div className="flex h-screen overflow-hidden ui-modern-shell">
+    <div className="flex h-screen overflow-hidden ui-modern-shell" data-ui-perf={reducedPerfMode ? 'reduced' : undefined}>
       {open && <div className="fixed inset-0 z-40 bg-slate-950/42 backdrop-blur-sm lg:hidden" onClick={() => setOpen(false)} />}
       <aside className={`fixed inset-y-0 left-0 z-50 flex w-[88vw] max-w-[320px] flex-col ui-modern-sidebar transition-transform duration-300 lg:static lg:w-64 lg:max-w-none lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Brand */}
@@ -451,7 +449,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
             </div>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto ui-modern-scrollbar p-3 pb-24 sm:p-4 sm:pb-28 lg:p-6 lg:pb-6 xl:p-7"><Outlet context={outletContext} /></div>
+        <div className="ui-modern-content flex-1 overflow-y-auto ui-modern-scrollbar p-3 pb-24 sm:p-4 sm:pb-28 lg:p-6 lg:pb-6 xl:p-7"><Outlet context={outletContext} /></div>
       </main>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(239,246,255,0.84))] px-3 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-2xl dark:border-blue-400/15 dark:bg-[linear-gradient(180deg,rgba(7,17,31,0.96),rgba(11,26,46,0.92))] lg:hidden">
         <div className="grid grid-cols-5 gap-2">
@@ -474,3 +472,5 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     </div>
   );
 }
+
+export default memo(LayoutShell);
