@@ -72,6 +72,8 @@ if [[ -d "$PLUGIN_ROOT" ]]; then
   done
 fi
 
+rm -rf "$STAGE_DIR/.plugin-build"
+
 cat > "$STAGE_DIR/data/openclaw-config/openclaw.json" <<'EOF'
 {
   "gateway": {

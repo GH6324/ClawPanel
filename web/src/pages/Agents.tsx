@@ -114,6 +114,9 @@ interface ChannelMeta {
   defaultAccount?: string;
 }
 
+const LITE_WORKSPACE_ROOT = '/opt/clawpanel-lite/data/openclaw-work';
+const LITE_AGENT_ROOT = '/opt/clawpanel-lite/data/openclaw-config/agents';
+
 interface AgentModelResponse {
   ok?: boolean;
   providers?: Record<string, any>;
@@ -1331,6 +1334,7 @@ export default function Agents() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [identityImportMsg, setIdentityImportMsg] = useState('');
+  const [edition, setEdition] = useState<'lite' | 'pro'>('pro');
 
   const [workbenchView, setWorkbenchView] = useState<AgentsWorkbenchView>('directory');
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -1380,6 +1384,20 @@ export default function Agents() {
   const explicitAgents = useMemo(() => {
     return agents.filter(agent => !isImplicitAgent(agent));
   }, [agents]);
+
+  const displayWorkspacePath = (workspace?: string) => {
+    const value = (workspace || '').trim();
+    if (value) return value;
+    return edition === 'lite' ? LITE_WORKSPACE_ROOT : '未设置';
+  };
+
+  const displayAgentDirPath = (agentDir?: string, agentId?: string) => {
+    const value = (agentDir || '').trim();
+    if (value) return value;
+    const resolvedAgentId = (agentId || '').trim();
+    if (edition === 'lite' && resolvedAgentId) return `${LITE_AGENT_ROOT}/${resolvedAgentId}`;
+    return edition === 'lite' ? LITE_AGENT_ROOT : '未设置';
+  };
 
   const channelOptions = useMemo(() => {
     return Object.keys(channelMeta).sort();
@@ -1791,6 +1809,12 @@ export default function Agents() {
       setTimeout(() => setMsg(''), 4000);
     }
   };
+
+  useEffect(() => {
+    api.getPanelVersion().then(r => {
+      if (r.ok && (r.edition === 'lite' || r.edition === 'pro')) setEdition(r.edition);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -2722,7 +2746,7 @@ export default function Agents() {
                           </div>
                         </div>
                         <div className="mt-3 space-y-1 text-[11px] text-gray-500">
-                          <div className="min-w-0">工作区（Workspace）：<span className="font-mono text-gray-700 dark:text-gray-200 break-all">{agent.workspace || '—'}</span></div>
+                          <div className="min-w-0">工作区（Workspace）：<span className="font-mono text-gray-700 dark:text-gray-200 break-all">{displayWorkspacePath(agent.workspace)}</span></div>
                           <div>最后活跃（Last Active）：<span className="text-gray-700 dark:text-gray-200">{formatLastActive(agent.lastActive)}</span></div>
                         </div>
                       </button>
@@ -3020,11 +3044,11 @@ export default function Agents() {
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                             <div className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-3">
                               <div className="text-gray-400">工作区（Workspace）</div>
-                              <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 break-all">{selectedAgent.workspace || '未设置'}</div>
+                              <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 break-all">{displayWorkspacePath(selectedAgent.workspace)}</div>
                             </div>
                             <div className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-3">
                               <div className="text-gray-400">Agent 目录（AgentDir）</div>
-                              <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 break-all">{selectedAgent.agentDir || '未设置'}</div>
+                              <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 break-all">{displayAgentDirPath(selectedAgent.agentDir, selectedAgent.id)}</div>
                             </div>
                           </div>
                           {(selectedToolAllow.length > 0 || selectedToolDeny.length > 0) && (
@@ -3238,7 +3262,7 @@ export default function Agents() {
                               </div>
                               <div className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2">
                                 <div className="text-gray-400">workspace</div>
-                                <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 truncate">{skillsContext.workspace || selectedAgent?.workspace || '未设置'}</div>
+                                <div className="mt-1 font-mono text-gray-700 dark:text-gray-200 truncate">{displayWorkspacePath(skillsContext.workspace || selectedAgent?.workspace)}</div>
                               </div>
                               {selectedSkillSourceSummary.map(item => (
                                 <div key={item.key} className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2">
@@ -4051,7 +4075,7 @@ export default function Agents() {
                   </div>
                   <div className="rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-700 px-3 py-2">
                       <div className="text-gray-400">工作区（Workspace）</div>
-                    <div className="font-mono text-gray-700 dark:text-gray-200 mt-1 break-all">{form.workspace.trim() || '未设置'}</div>
+                    <div className="font-mono text-gray-700 dark:text-gray-200 mt-1 break-all">{displayWorkspacePath(form.workspace.trim())}</div>
                   </div>
                   <div className="rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-700 px-3 py-2">
                       <div className="text-gray-400">默认接管（Default）</div>
