@@ -1252,7 +1252,9 @@ func (s *Server) doReplaceLitePackage(tmpFile string) {
 		return
 	}
 	if err := os.Chmod(s.panelBin, 0755); err == nil {
-		_ = os.Chmod(filepath.Join(installDir, "bin", "clawlite-openclaw"), 0755)
+		if runtime.GOOS != "windows" {
+			_ = os.Chmod(filepath.Join(installDir, "bin", s.editionCfg.launcherName()), 0755)
+		}
 	}
 	s.setStep(5, "done", "Lite 面板与运行环境替换完成")
 	s.logMsg("✅ Lite 面板与运行环境替换完成")
@@ -1301,7 +1303,7 @@ func (s *Server) doReplaceLitePackage(tmpFile string) {
 func (s *Server) stopPanel() error {
 	if runtime.GOOS == "windows" {
 		// Try service stop first
-		exec.Command("net", "stop", "ClawPanel").Run()
+		exec.Command("net", "stop", s.editionCfg.ServiceName).Run()
 		time.Sleep(2 * time.Second)
 
 		// Kill clawpanel.exe processes by PID, excluding ourselves and our parent.
@@ -1310,7 +1312,8 @@ func (s *Server) stopPanel() error {
 		parentPID := os.Getppid()
 
 		// Use WMIC to list all clawpanel.exe PIDs
-		out, err := exec.Command("wmic", "process", "where", "name='clawpanel.exe'", "get", "processid", "/value").Output()
+		processName := s.editionCfg.BinaryName + ".exe"
+		out, err := exec.Command("wmic", "process", "where", "name='"+processName+"'", "get", "processid", "/value").Output()
 		if err == nil {
 			for _, line := range strings.Split(string(out), "\n") {
 				line = strings.TrimSpace(line)
@@ -1333,8 +1336,8 @@ func (s *Server) stopPanel() error {
 		time.Sleep(1 * time.Second)
 	} else {
 		if runtime.GOOS == "darwin" {
-			_ = exec.Command("launchctl", "stop", "com.clawpanel.service").Run()
-			_ = exec.Command("launchctl", "bootout", "system", "/Library/LaunchDaemons/com.clawpanel.service.plist").Run()
+			_ = exec.Command("launchctl", "stop", s.editionCfg.ServiceLabel).Run()
+			_ = exec.Command("launchctl", "bootout", "system", "/Library/LaunchDaemons/"+s.editionCfg.ServiceLabel+".plist").Run()
 			time.Sleep(2 * time.Second)
 		} else {
 			if commandExists("systemctl") {
@@ -1360,7 +1363,7 @@ func (s *Server) stopPanel() error {
 
 func (s *Server) startPanel() error {
 	if runtime.GOOS == "windows" {
-		err := exec.Command("net", "start", "ClawPanel").Run()
+		err := exec.Command("net", "start", s.editionCfg.ServiceName).Run()
 		if err != nil {
 			// Try direct start
 			cmd := exec.Command(s.panelBin)
@@ -1371,11 +1374,11 @@ func (s *Server) startPanel() error {
 	}
 	err := exec.Command("systemctl", "start", s.editionCfg.ServiceName).Run()
 	if runtime.GOOS == "darwin" {
-		if err := exec.Command("launchctl", "kickstart", "-k", "system/com.clawpanel.service").Run(); err == nil {
+		if err := exec.Command("launchctl", "kickstart", "-k", "system/"+s.editionCfg.ServiceLabel).Run(); err == nil {
 			return nil
 		}
-		_ = exec.Command("launchctl", "load", "-w", "/Library/LaunchDaemons/com.clawpanel.service.plist").Run()
-		if err := exec.Command("launchctl", "kickstart", "-k", "system/com.clawpanel.service").Run(); err == nil {
+		_ = exec.Command("launchctl", "load", "-w", "/Library/LaunchDaemons/"+s.editionCfg.ServiceLabel+".plist").Run()
+		if err := exec.Command("launchctl", "kickstart", "-k", "system/"+s.editionCfg.ServiceLabel).Run(); err == nil {
 			return nil
 		}
 		cmd := exec.Command("bash", "-c", fmt.Sprintf("nohup %s >/dev/null 2>&1 &", s.panelBin))
@@ -1391,8 +1394,9 @@ func (s *Server) startPanel() error {
 
 func (s *Server) isPanelRunning() bool {
 	if runtime.GOOS == "windows" {
-		out, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq clawpanel.exe", "/NH").Output()
-		return strings.Contains(string(out), "clawpanel")
+		imageName := s.editionCfg.BinaryName + ".exe"
+		out, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq "+imageName, "/NH").Output()
+		return strings.Contains(strings.ToLower(string(out)), strings.ToLower(s.editionCfg.BinaryName))
 	}
 	if runtime.GOOS == "darwin" {
 		return isPortOpen(s.panelPort)
@@ -1817,10 +1821,15 @@ func extractTarGz(src, dest string) error {
 func validateLitePackage(root string) error {
 	required := []string{
 		"clawpanel-lite",
-		filepath.Join("bin", "clawlite-openclaw"),
 		"runtime",
 		filepath.Join("runtime", "openclaw"),
 	}
+	launcherName := "clawlite-openclaw"
+	if runtime.GOOS == "windows" {
+		required[0] = "clawpanel-lite.exe"
+		launcherName = "clawlite-openclaw.cmd"
+	}
+	required = append(required, filepath.Join("bin", launcherName))
 	for _, rel := range required {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			return fmt.Errorf("缺少 %s", rel)
@@ -1862,7 +1871,7 @@ func (s *Server) isLiteRuntimeReady() bool {
 	if !s.editionCfg.isLiteFullPackage() {
 		return true
 	}
-	cmd := exec.Command(filepath.Join(filepath.Dir(s.panelBin), "bin", "clawlite-openclaw"), "--version")
+	cmd := exec.Command(filepath.Join(filepath.Dir(s.panelBin), "bin", s.editionCfg.launcherName()), "--version")
 	cmd.Env = os.Environ()
 	cmd.Dir = filepath.Dir(s.panelBin)
 	return cmd.Run() == nil

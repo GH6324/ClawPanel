@@ -68,10 +68,11 @@ func (c editionConfig) binaryAssetName(version, platformKey string) string {
 }
 
 func (c editionConfig) liteCoreAssetName(version, platformKey string) string {
-	if platformKey != "linux_amd64" {
+	suffix := strings.ReplaceAll(platformKey, "_", "-")
+	if strings.TrimSpace(suffix) == "" {
 		return ""
 	}
-	return fmt.Sprintf("clawpanel-lite-core-v%s-linux-amd64.tar.gz", version)
+	return fmt.Sprintf("clawpanel-lite-core-v%s-%s.tar.gz", version, suffix)
 }
 
 func (c editionConfig) updateAssetName(version, platformKey string) string {

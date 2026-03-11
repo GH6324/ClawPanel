@@ -221,10 +221,11 @@ curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/install-lite.sh -o insta
 
 自动完成：下载 Lite Core → 安装到 `/opt/clawpanel-lite` → 注册 `clawpanel-lite` 服务 → 启动内置 OpenClaw。
 
-**ClawPanel Lite（Windows / macOS，稍后提供）**
+**ClawPanel Lite（Windows / macOS，预览阶段）**
 
 ```text
-敬请期待，Lite 的 Windows / macOS 安装包与脚本后续上线。
+Windows / macOS Lite 安装脚本与整包结构已接入仓库，当前处于预览推进阶段。
+正式稳定发布前，建议优先使用 Linux Lite。
 ```
 
 **ClawPanel Pro（Linux / macOS）**
