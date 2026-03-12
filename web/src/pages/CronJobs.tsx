@@ -9,6 +9,15 @@ import {
 import { useI18n } from '../i18n';
 import MobileActionTray from '../components/MobileActionTray';
 
+interface CronDelivery {
+  mode?: 'none' | 'announce' | 'webhook';
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  bestEffort?: boolean;
+  url?: string;
+}
+
 interface CronJob {
   id: string;
   name: string;
@@ -16,12 +25,18 @@ interface CronJob {
   enabled: boolean;
   /** agentId: which agent handles this job (new field; old jobs omit it and used sessionTarget instead) */
   agentId?: string;
-  schedule: { kind: string; expr?: string; everyMs?: number; atMs?: number; tz?: string };
+  schedule: { kind: string; expr?: string; every?: string; everyMs?: number; at?: string; atMs?: number; tz?: string };
   /** sessionTarget: 'main' | 'isolated' — which session scope to use (new semantic); legacy jobs store the agentId here */
   sessionTarget: string;
   wakeMode: string;
   payload: { kind: string; text?: string; message?: string; deliver?: boolean; channel?: string; to?: string };
-  state: { nextRunAtMs?: number; lastRunAtMs?: number; lastStatus?: string; lastError?: string; lastDurationMs?: number };
+  /** Top-level delivery config (canonical format, replaces legacy payload.deliver) */
+  delivery?: CronDelivery;
+  state: {
+    nextRunAtMs?: number; lastRunAtMs?: number; lastStatus?: string; lastError?: string; lastDurationMs?: number;
+    lastRunStatus?: string; lastDeliveryStatus?: string; lastDeliveryError?: string;
+    consecutiveErrors?: number;
+  };
   createdAtMs: number;
 }
 
@@ -35,8 +50,45 @@ function resolveAgentId(job: CronJob, fallback: string): string {
 
 /** Resolve the effective session mode from a job */
 function resolveSessionMode(job: CronJob): string {
-  if (job.agentId != null) return job.sessionTarget; // new format
-  return 'main'; // legacy format: assume main session
+  // T1: prioritize sessionTarget over agentId presence
+  if (job.sessionTarget === 'main' || job.sessionTarget === 'isolated') return job.sessionTarget;
+  if (job.agentId != null) return 'isolated'; // has agentId but no valid sessionTarget → infer isolated
+  return 'main'; // both missing → default main
+}
+
+/** Resolve the effective delivery mode from a job (handles legacy payload.deliver) */
+function resolveDelivery(job: CronJob): CronDelivery {
+  if (job.delivery?.mode) return job.delivery;
+  // Legacy fallback: payload.deliver boolean → announce/none
+  if (job.payload.deliver === true) {
+    return {
+      mode: 'announce',
+      channel: job.payload.channel,
+      to: job.payload.to,
+    };
+  }
+  return { mode: 'none' };
+}
+
+/** Resolve the effective delivery status label */
+function resolveDeliveryStatus(job: CronJob): string | undefined {
+  return job.state.lastDeliveryStatus || (job.delivery?.mode === 'none' ? 'not-requested' : undefined);
+}
+
+// T7: Parse well-known error codes from error strings
+const KNOWN_ERROR_CODES: Record<string, { zh: string; en: string }> = {
+  '99992361': { zh: 'open_id \u8de8\u5e94\u7528\uff0c\u8bf7\u68c0\u67e5 accountId \u662f\u5426\u6b63\u786e', en: 'open_id cross app - check accountId' },
+  '99991400': { zh: '\u8bf7\u6c42\u53c2\u6570\u9519\u8bef', en: 'Invalid request parameters' },
+  '99991401': { zh: '\u8ba4\u8bc1\u5931\u8d25\uff0c\u68c0\u67e5 token', en: 'Auth failed - check token' },
+  '99991672': { zh: '\u6743\u9650\u4e0d\u8db3\uff0c\u68c0\u67e5\u5e94\u7528 scope', en: 'Insufficient scope/permission' },
+  '230001': { zh: '\u673a\u5668\u4eba\u4e0d\u5728\u7fa4\u5185', en: 'Bot not in chat group' },
+};
+
+function parseErrorHint(error: string, locale: string): string | null {
+  for (const [code, hint] of Object.entries(KNOWN_ERROR_CODES)) {
+    if (error.includes(code)) return locale === 'zh-CN' ? hint.zh : hint.en;
+  }
+  return null;
 }
 
 type ScheduleKind = 'cron' | 'every' | 'at';
@@ -56,11 +108,18 @@ function CronJobsPage() {
   // New job form — core
   const [newName, setNewName] = useState('');
   const [newMessage, setNewMessage] = useState('');
-  const [newDeliver, setNewDeliver] = useState(true);
+
+  // New job form — delivery (replaces legacy newDeliver checkbox)
+  const [newDeliveryMode, setNewDeliveryMode] = useState<'none' | 'announce' | 'webhook'>('announce');
+  const [newDeliveryAccountId, setNewDeliveryAccountId] = useState('');
+  const [newWebhookUrl, setNewWebhookUrl] = useState('');
 
   // New job form — agent + session target (separated)
   const [newAgentId, setNewAgentId] = useState('');
-  const [newSessionMode, setNewSessionMode] = useState<'main' | 'isolated'>('main');
+  const [newSessionMode, setNewSessionMode] = useState<'main' | 'isolated'>('isolated');
+
+  // T4: Feishu account options for delivery accountId dropdown
+  const [feishuAccounts, setFeishuAccounts] = useState<string[]>([]);
 
   // New job form — schedule
   const [newScheduleKind, setNewScheduleKind] = useState<ScheduleKind>('cron');
@@ -71,6 +130,7 @@ function CronJobsPage() {
   useEffect(() => {
     loadJobs();
     loadAgents();
+    loadFeishuAccounts();
   }, []);
 
   const loadJobs = async () => {
@@ -108,6 +168,21 @@ function CronJobsPage() {
     }
   };
 
+  // T4: load Feishu account IDs for delivery accountId dropdown
+  const loadFeishuAccounts = async () => {
+    try {
+      const r = await api.getOpenClawConfig();
+      if (r.ok && r.config) {
+        const feishu = r.config?.channels?.feishu;
+        if (feishu?.accounts && typeof feishu.accounts === 'object') {
+          setFeishuAccounts(Object.keys(feishu.accounts));
+        } else if (feishu?.defaultAccount) {
+          setFeishuAccounts([feishu.defaultAccount]);
+        }
+      }
+    } catch { /* ignore — feishu accounts are optional enhancement */ }
+  };
+
   const toggleJob = async (id: string) => {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
@@ -142,9 +217,9 @@ function CronJobsPage() {
   const buildSchedule = (): CronJob['schedule'] => {
     if (newScheduleKind === 'cron') return { kind: 'cron', expr: newCron };
     if (newScheduleKind === 'every') return { kind: 'every', everyMs: Math.max(1, newEveryMin) * 60000 };
-    // 'at'
-    const ms = newAtDateTime ? new Date(newAtDateTime).getTime() : Date.now() + 3600000;
-    return { kind: 'at', atMs: ms };
+    // T9: 'at' uses ISO 8601 string instead of atMs
+    const iso = newAtDateTime ? new Date(newAtDateTime).toISOString() : new Date(Date.now() + 3600000).toISOString();
+    return { kind: 'at', at: iso };
   };
 
   const createJob = async () => {
@@ -158,7 +233,23 @@ function CronJobsPage() {
       setTimeout(() => setMsg(''), 2000);
       return;
     }
+    if (newDeliveryMode === 'webhook' && !newWebhookUrl.trim()) {
+      setMsg(locale === 'zh-CN' ? 'Webhook 模式必须填写 URL' : 'Webhook mode requires a URL');
+      setTimeout(() => setMsg(''), 2000);
+      return;
+    }
     const agentId = newAgentId || defaultAgent || 'main';
+    // T6: payload.kind is determined by sessionTarget
+    const payloadKind = newSessionMode === 'main' ? 'systemEvent' : 'agentTurn';
+    const payload: CronJob['payload'] = payloadKind === 'agentTurn'
+      ? { kind: 'agentTurn', message: newMessage.trim() }
+      : { kind: 'systemEvent', text: newMessage.trim() };
+    // T5: canonical delivery at top level
+    const delivery: CronDelivery = newDeliveryMode === 'announce'
+      ? { mode: 'announce', ...(newDeliveryAccountId ? { accountId: newDeliveryAccountId } : {}) }
+      : newDeliveryMode === 'webhook'
+        ? { mode: 'webhook', ...(newWebhookUrl ? { url: newWebhookUrl } : {}) }
+        : { mode: 'none' };
     const job: CronJob = {
       id: 'cron_' + Date.now(),
       name: newName.trim(),
@@ -167,7 +258,8 @@ function CronJobsPage() {
       schedule: buildSchedule(),
       sessionTarget: newSessionMode,
       wakeMode: 'now',
-      payload: { kind: 'agentTurn', message: newMessage.trim(), deliver: newDeliver },
+      payload,
+      delivery,
       state: {},
       createdAtMs: Date.now(),
     };
@@ -180,7 +272,10 @@ function CronJobsPage() {
       setNewName('');
       setNewMessage('');
       setNewAgentId(defaultAgent || 'main');
-      setNewSessionMode('main');
+      setNewSessionMode('isolated');
+      setNewDeliveryMode('announce');
+      setNewDeliveryAccountId('');
+      setNewWebhookUrl('');
       setNewScheduleKind('cron');
       setNewCron('0 9 * * *');
       setNewEveryMin(60);
@@ -195,8 +290,18 @@ function CronJobsPage() {
 
   const formatSchedule = (s: CronJob['schedule']) => {
     if (s.kind === 'cron') return `Cron: ${s.expr}${s.tz ? ` (${s.tz})` : ''}`;
-    if (s.kind === 'every') return t.cron.everyMinutes.replace('{n}', String(Math.round((s.everyMs || 0) / 60000)));
-    if (s.kind === 'at') return `${t.cron.oneTime}: ${new Date(s.atMs || 0).toLocaleString()}`;
+    if (s.kind === 'every') {
+      // Support both everyMs (number) and every (string like "10m")
+      if (s.everyMs) return t.cron.everyMinutes.replace('{n}', String(Math.round(s.everyMs / 60000)));
+      if (s.every) return `${t.cron.scheduleKindEvery}: ${s.every}`;
+      return t.cron.scheduleKindEvery;
+    }
+    if (s.kind === 'at') {
+      // T9: support both ISO at (canonical) and atMs (legacy)
+      if (s.at) return `${t.cron.oneTime}: ${new Date(s.at).toLocaleString()}`;
+      if (s.atMs) return `${t.cron.oneTime}: ${new Date(s.atMs).toLocaleString()}`;
+      return t.cron.oneTime;
+    }
     return JSON.stringify(s);
   };
 
@@ -258,11 +363,15 @@ function CronJobsPage() {
               className={inputCls} />
           </div>
 
-          {/* Row 2: agent + session mode */}
+          {/* Row 2: agent + session mode (T6: linked constraints) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">{t.cron.agentId}</label>
-              <select value={newAgentId} onChange={e => setNewAgentId(e.target.value)}
+              <select value={newAgentId} onChange={e => {
+                setNewAgentId(e.target.value);
+                // T6: non-default agent must use isolated
+                if (e.target.value !== defaultAgent) setNewSessionMode('isolated');
+              }}
                 className={inputCls + ' font-mono'}>
                 {agentOptions.map(id => <option key={id} value={id}>{id}</option>)}
               </select>
@@ -270,22 +379,30 @@ function CronJobsPage() {
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">{t.cron.sessionMode}</label>
               <div className="flex gap-2">
-                {(['main', 'isolated'] as const).map(mode => (
-                  <button key={mode} type="button"
-                    onClick={() => setNewSessionMode(mode)}
-                    className={`flex-1 py-2.5 text-xs font-semibold rounded-lg border transition-all ${
-                      newSessionMode === mode
-                        ? modern
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                          : 'bg-violet-600 text-white border-violet-600 shadow-sm'
-                        : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-                    }`}>
-                    {mode === 'main' ? t.cron.sessionModeMain : t.cron.sessionModeIsolated}
-                  </button>
-                ))}
+                {(['main', 'isolated'] as const).map(mode => {
+                  // T6: non-default agent → disable main
+                  const disabled = mode === 'main' && newAgentId !== '' && newAgentId !== defaultAgent;
+                  return (
+                    <button key={mode} type="button"
+                      disabled={disabled}
+                      onClick={() => setNewSessionMode(mode)}
+                      className={`flex-1 py-2.5 text-xs font-semibold rounded-lg border transition-all ${
+                        disabled ? 'opacity-40 cursor-not-allowed bg-gray-100 dark:bg-gray-900 text-gray-400 border-gray-200 dark:border-gray-700' :
+                        newSessionMode === mode
+                          ? modern
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-violet-600 text-white border-violet-600 shadow-sm'
+                          : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                      }`}>
+                      {mode === 'main' ? t.cron.sessionModeMain : t.cron.sessionModeIsolated}
+                    </button>
+                  );
+                })}
               </div>
               <p className="text-[10px] text-gray-400">
-                {newSessionMode === 'isolated' ? (locale === 'zh-CN' ? '每次创建独立会话，互不干扰' : 'A fresh isolated session each run') : (locale === 'zh-CN' ? '复用 Agent 的主会话上下文' : 'Reuses the agent\'s main session')}
+                {newSessionMode === 'isolated'
+                  ? (locale === 'zh-CN' ? '每次创建独立会话 → agentTurn' : 'Fresh isolated session → agentTurn')
+                  : (locale === 'zh-CN' ? '复用主会话上下文 → systemEvent' : 'Reuses main session → systemEvent')}
               </p>
             </div>
           </div>
@@ -360,14 +477,65 @@ function CronJobsPage() {
               rows={3} className={inputCls + ' resize-none'} />
           </div>
 
-          {/* Row 5: deliver + actions */}
-          <div className="flex items-center justify-between pt-2">
-            <label className="flex items-center gap-2.5 cursor-pointer group">
-              <input type="checkbox" checked={newDeliver} onChange={e => setNewDeliver(e.target.checked)}
-                className={`w-4 h-4 rounded border-gray-300 transition-colors ${modern ? 'text-blue-600 focus:ring-blue-500' : 'text-violet-600 focus:ring-violet-500'}`} />
-              <span className="text-sm text-gray-600 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-gray-200 transition-colors">{t.cron.deliverToChannel}</span>
-            </label>
-            <div className="flex gap-3">
+          {/* Row 5: delivery mode + account + actions */}
+          <div className="space-y-3 pt-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                  {locale === 'zh-CN' ? '投递方式' : 'Delivery Mode'}
+                </label>
+                <div className="flex gap-2">
+                  {(['announce', 'webhook', 'none'] as const).map(mode => (
+                    <button key={mode} type="button"
+                      onClick={() => setNewDeliveryMode(mode)}
+                      className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-all ${
+                        newDeliveryMode === mode
+                          ? modern ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-violet-600 text-white border-violet-600 shadow-sm'
+                          : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                      }`}>
+                      {mode === 'announce' ? (locale === 'zh-CN' ? '发送到通道' : 'Announce') : mode === 'webhook' ? 'Webhook' : (locale === 'zh-CN' ? '不投递' : 'None')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {newDeliveryMode === 'announce' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                    {locale === 'zh-CN' ? '飞书账号 (accountId)' : 'Feishu Account (accountId)'}
+                  </label>
+                  {feishuAccounts.length > 0 ? (
+                    <select value={newDeliveryAccountId} onChange={e => setNewDeliveryAccountId(e.target.value)}
+                      className={inputCls + ' font-mono'}>
+                      <option value="">{locale === 'zh-CN' ? '-- 默认账号 --' : '-- Default Account --'}</option>
+                      {feishuAccounts.map(acct => <option key={acct} value={acct}>{acct}</option>)}
+                    </select>
+                  ) : (
+                    <input value={newDeliveryAccountId} onChange={e => setNewDeliveryAccountId(e.target.value)}
+                      placeholder={locale === 'zh-CN' ? '留空使用默认账号' : 'Leave empty for default account'}
+                      className={inputCls + ' font-mono'} />
+                  )}
+                  <p className="text-[10px] text-amber-500">
+                    {locale === 'zh-CN' ? '⚠️ 多账号场景必须指定，否则可能 open_id cross app' : '⚠️ Required for multi-account to avoid open_id cross app'}
+                  </p>
+                </div>
+              )}
+              {/* T8: Webhook URL input */}
+              {newDeliveryMode === 'webhook' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                    Webhook URL
+                  </label>
+                  <input value={newWebhookUrl} onChange={e => setNewWebhookUrl(e.target.value)}
+                    placeholder="https://example.com/webhook"
+                    type="url"
+                    className={inputCls + ' font-mono'} />
+                  <p className="text-[10px] text-gray-500">
+                    {locale === 'zh-CN' ? '任务完成后将结果 POST 到此 URL' : 'Task result will be POSTed to this URL on completion'}
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-1">
               <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors">{t.common.cancel}</button>
               <button onClick={createJob} className={`${modern ? 'page-modern-accent px-6 py-2 text-sm' : 'px-6 py-2 text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 rounded-lg shadow-sm shadow-violet-200 dark:shadow-none transition-all hover:shadow-md hover:shadow-violet-200 dark:hover:shadow-none'}`}>{t.cron.createNow}</button>
             </div>
@@ -415,6 +583,27 @@ function CronJobsPage() {
                           {t.cron.lastRun}: {new Date(job.state.lastRunAtMs).toLocaleString()}
                         </span>
                       )}
+                      {/* T3: delivery status badge in list */}
+                      {(() => {
+                        const dStatus = resolveDeliveryStatus(job);
+                        if (!dStatus || dStatus === 'not-requested') return null;
+                        const colors = dStatus === 'delivered'
+                          ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800/30'
+                          : dStatus === 'not-delivered'
+                          ? 'bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 border-red-100 dark:border-red-800/30'
+                          : 'bg-gray-50 dark:bg-gray-900/50 text-gray-500 border-gray-100 dark:border-gray-800';
+                        return (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${colors}`}>
+                            {locale === 'zh-CN' ? '\u6295\u9012' : 'delivery'}: {dStatus}
+                          </span>
+                        );
+                      })()}
+                      {/* T3: delivery accountId hint when present */}
+                      {resolveDelivery(job).accountId && (
+                        <span className="text-[10px] text-amber-500 font-mono">
+                          [{resolveDelivery(job).accountId}]
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -449,21 +638,76 @@ function CronJobsPage() {
                       </div>
                       <div className="space-y-1">
                         <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{t.cron.jobType}</span>
-                        <div className="font-mono text-gray-700 dark:text-gray-300">{job.payload.kind}</div>
+                        <div className="font-mono text-gray-700 dark:text-gray-300">
+                          {job.payload.kind}
+                          {/* T6: show constraint hint */}
+                          <span className="ml-1 text-[10px] text-gray-400">
+                            ({effectiveSessionMode === 'isolated' ? 'agentTurn' : 'systemEvent'})
+                          </span>
+                        </div>
                       </div>
-                      {job.payload.deliver !== undefined && (
-                        <div className="space-y-1">
-                          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{t.cron.resultPush}</span>
-                          <div className={`font-medium ${job.payload.deliver ? 'text-emerald-600' : 'text-gray-500'}`}>{job.payload.deliver ? t.common.on : t.common.off}</div>
-                        </div>
-                      )}
 
-                      {job.state.lastError && (
-                        <div className="md:col-span-2 bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-100 dark:border-red-900/30">
-                          <span className="text-xs font-bold text-red-500 uppercase tracking-wider block mb-1">{t.cron.execError}</span>
-                          <div className="text-xs text-red-600 dark:text-red-400 font-mono break-all">{job.state.lastError}</div>
-                        </div>
-                      )}
+                      {/* T2: Delivery info (canonical + legacy fallback) */}
+                      {(() => {
+                        const d = resolveDelivery(job);
+                        const dStatus = resolveDeliveryStatus(job);
+                        return (
+                          <>
+                            <div className="space-y-1">
+                              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                {locale === 'zh-CN' ? '\u6295\u9012\u65b9\u5f0f' : 'Delivery Mode'}
+                              </span>
+                              <div className={`font-medium ${d.mode === 'announce' ? 'text-emerald-600' : 'text-gray-500'}`}>
+                                {d.mode === 'announce' ? (locale === 'zh-CN' ? '\u53d1\u9001\u5230\u901a\u9053' : 'Announce') : (locale === 'zh-CN' ? '\u4e0d\u6295\u9012' : 'None')}
+                              </div>
+                            </div>
+                            {d.accountId && (
+                              <div className="space-y-1">
+                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                  {locale === 'zh-CN' ? '\u98de\u4e66\u8d26\u53f7' : 'Feishu Account'}
+                                </span>
+                                <div className="font-mono text-amber-600 dark:text-amber-400">{d.accountId}</div>
+                              </div>
+                            )}
+                            {dStatus && (
+                              <div className="space-y-1">
+                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                  {locale === 'zh-CN' ? '\u6295\u9012\u72b6\u6001' : 'Delivery Status'}
+                                </span>
+                                <div className={`font-mono ${dStatus === 'delivered' ? 'text-emerald-600' : dStatus === 'not-delivered' ? 'text-red-500' : 'text-gray-500'}`}>
+                                  {dStatus}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+
+                      {/* T7: Execution error with parsed hint */}
+                      {job.state.lastError && (() => {
+                        const hint = parseErrorHint(job.state.lastError, locale);
+                        return (
+                          <div className="md:col-span-2 bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-100 dark:border-red-900/30">
+                            <span className="text-xs font-bold text-red-500 uppercase tracking-wider block mb-1">{t.cron.execError}</span>
+                            <div className="text-xs text-red-600 dark:text-red-400 font-mono break-all">{job.state.lastError}</div>
+                            {hint && <div className="mt-1 text-xs text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 px-2 py-1 rounded">\u2139\uFE0F {hint}</div>}
+                          </div>
+                        );
+                      })()}
+
+                      {/* T7: Delivery error with parsed hint */}
+                      {job.state.lastDeliveryError && (() => {
+                        const hint = parseErrorHint(job.state.lastDeliveryError, locale);
+                        return (
+                          <div className="md:col-span-2 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-100 dark:border-amber-900/30">
+                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wider block mb-1">
+                              {locale === 'zh-CN' ? '\u6295\u9012\u9519\u8bef' : 'Delivery Error'}
+                            </span>
+                            <div className="text-xs text-amber-600 dark:text-amber-400 font-mono break-all">{job.state.lastDeliveryError}</div>
+                            {hint && <div className="mt-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40 px-2 py-1 rounded">\u2139\uFE0F {hint}</div>}
+                          </div>
+                        );
+                      })()}
 
                       {(job.payload.text || job.payload.message) && (
                         <div className="md:col-span-2 space-y-1.5">

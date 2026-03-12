@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/goccy/go-yaml"
@@ -133,6 +134,148 @@ func ToggleSkill(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
+// GetSkillConfig returns the current values for a skill's declared requires.config keys.
+func GetSkillConfig(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		requested := strings.TrimSpace(c.Param("id"))
+		if requested == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing skill id"})
+			return
+		}
+		agentID, err := resolveRequestedAgentID(cfg, c.Query("agentId"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		skill, ocConfig, err := resolveSkillConfigTarget(cfg, agentID, requested)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		configKeys := asStringSlice(skill.Requires["config"])
+		values := make(map[string]interface{}, len(configKeys))
+		for _, key := range configKeys {
+			value, ok, err := getNestedConfigValue(ocConfig, key)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+				return
+			}
+			if ok {
+				values[key] = value
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"ok":         true,
+			"agentId":    agentID,
+			"skillId":    skill.ID,
+			"skillKey":   skill.SkillKey,
+			"configKeys": configKeys,
+			"values":     values,
+		})
+	}
+}
+
+// UpdateSkillConfig updates the current values for a skill's declared requires.config keys.
+func UpdateSkillConfig(cfg *config.Config) gin.HandlerFunc {
+	type reqBody struct {
+		AgentID string                 `json:"agentId"`
+		Values  map[string]interface{} `json:"values"`
+	}
+	return func(c *gin.Context) {
+		requested := strings.TrimSpace(c.Param("id"))
+		if requested == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing skill id"})
+			return
+		}
+
+		var req reqBody
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if len(req.Values) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing config values"})
+			return
+		}
+
+		agentID, err := resolveRequestedAgentID(cfg, req.AgentID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		skill, ocConfig, err := resolveSkillConfigTarget(cfg, agentID, requested)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		configKeys := asStringSlice(skill.Requires["config"])
+		if len(configKeys) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "skill has no configurable keys"})
+			return
+		}
+		allowed := make(map[string]struct{}, len(configKeys))
+		for _, key := range configKeys {
+			allowed[key] = struct{}{}
+		}
+		for key := range req.Values {
+			if _, ok := allowed[key]; !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("config key %q is not declared by skill %q", key, skill.Name)})
+				return
+			}
+		}
+
+		for _, key := range configKeys {
+			value, ok := req.Values[key]
+			if !ok {
+				continue
+			}
+			if value == nil {
+				if err := deleteNestedConfigValue(ocConfig, key); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+					return
+				}
+				continue
+			}
+			if err := setNestedConfigValue(ocConfig, key, value); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+				return
+			}
+		}
+
+		if err := cfg.WriteOpenClawJSON(ocConfig); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		values := make(map[string]interface{}, len(configKeys))
+		for _, key := range configKeys {
+			value, ok, err := getNestedConfigValue(ocConfig, key)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+				return
+			}
+			if ok {
+				values[key] = value
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"ok":         true,
+			"agentId":    agentID,
+			"skillId":    skill.ID,
+			"skillKey":   skill.SkillKey,
+			"configKeys": configKeys,
+			"values":     values,
+			"updated":    len(req.Values),
+		})
+	}
+}
+
 // GetCronJobs returns cron jobs from openclaw.json cron.jobs.
 func GetCronJobs(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -153,6 +296,46 @@ func GetCronJobs(cfg *config.Config) gin.HandlerFunc {
 						jobs = arr
 					}
 				}
+			}
+		}
+		// T12: Normalize legacy delivery fields → canonical delivery on read
+		for i, raw := range jobs {
+			job, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// If job already has canonical delivery.mode, skip; remove incomplete delivery objects
+			if del, ok := job["delivery"].(map[string]interface{}); ok {
+				if m, hasMode := del["mode"]; hasMode {
+					if mStr, _ := m.(string); mStr != "" {
+						continue
+					}
+				}
+				// Incomplete delivery object (no mode) — remove so legacy promotion runs
+				delete(job, "delivery")
+			}
+			// Promote from legacy payload.deliver / payload.channel / payload.to
+			payload, _ := job["payload"].(map[string]interface{})
+			if payload == nil {
+				continue
+			}
+			deliver, _ := payload["deliver"].(bool)
+			channel, _ := payload["channel"].(string)
+			to, _ := payload["to"].(string)
+			bestEffort, _ := payload["bestEffortDeliver"].(bool)
+			if deliver || channel != "" || to != "" {
+				del := map[string]interface{}{"mode": "announce"}
+				if channel != "" {
+					del["channel"] = channel
+				}
+				if to != "" {
+					del["to"] = to
+				}
+				if bestEffort {
+					del["bestEffort"] = true
+				}
+				job["delivery"] = del
+				jobs[i] = job
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "jobs": jobs})
@@ -889,6 +1072,34 @@ func validateCronJobsSessionTargets(cfg *config.Config, jobs []map[string]interf
 		// Official semantics: sessionTarget is an execution mode ("main" or "isolated"),
 		// not an agent ID. Accept the two official values unconditionally.
 		if target == "main" || target == "isolated" {
+			// T10: validate sessionTarget↔payload.kind constraint
+			if payloadMap, ok := job["payload"].(map[string]interface{}); ok {
+				payloadKind, _ := payloadMap["kind"].(string)
+				if payloadKind == "" {
+					// Auto-fill missing payload.kind from sessionTarget
+					if target == "main" {
+						payloadMap["kind"] = "systemEvent"
+					} else {
+						payloadMap["kind"] = "agentTurn"
+					}
+				} else {
+					if target == "main" && payloadKind != "systemEvent" {
+						return fmt.Errorf("sessionTarget=main 只允许 payload.kind=systemEvent，当前为 %q", payloadKind)
+					}
+					if target == "isolated" && payloadKind != "agentTurn" {
+						return fmt.Errorf("sessionTarget=isolated 只允许 payload.kind=agentTurn，当前为 %q", payloadKind)
+					}
+				}
+			}
+			// T10: non-default agent must not use main session
+			if target == "main" {
+				if agentID, _ := job["agentId"].(string); agentID != "" && agentID != "main" {
+					defaultAgentID := loadDefaultAgentID(cfg)
+					if agentID != defaultAgentID {
+						return fmt.Errorf("非默认 Agent %q 不能使用 main session", agentID)
+					}
+				}
+			}
 			continue
 		}
 		// Backward-compat: if the value is a known agent ID (legacy behaviour), migrate it
@@ -901,6 +1112,77 @@ func validateCronJobsSessionTargets(cfg *config.Config, jobs []map[string]interf
 			continue
 		}
 		return fmt.Errorf("sessionTarget %q 无效，有效值为 \"main\" 或 \"isolated\"", target)
+	}
+	// Validate delivery configuration
+	for _, job := range jobs {
+		if deliveryMap, ok := job["delivery"].(map[string]interface{}); ok {
+			mode, _ := deliveryMap["mode"].(string)
+			if mode == "webhook" {
+				url, _ := deliveryMap["url"].(string)
+				url = strings.TrimSpace(url)
+				if url == "" {
+					return fmt.Errorf("delivery.mode=webhook 时必须指定非空 url")
+				}
+				urlLower := strings.ToLower(url)
+				if !strings.HasPrefix(urlLower, "http://") && !strings.HasPrefix(urlLower, "https://") {
+					return fmt.Errorf("webhook url 必须以 http:// 或 https:// 开头")
+				}
+				for _, blocked := range []string{"://localhost", "://127.0.0.1", "://0.0.0.0", "://[::1]", "://169.254.169.254"} {
+					if strings.Contains(urlLower, blocked) {
+						return fmt.Errorf("webhook url 不允许指向内部地址: %s", url)
+					}
+				}
+			}
+		}
+	}
+	// T11: validate schedule structure
+	for _, job := range jobs {
+		if schedMap, ok := job["schedule"].(map[string]interface{}); ok {
+			kind, _ := schedMap["kind"].(string)
+			switch kind {
+			case "cron":
+				if expr, _ := schedMap["expr"].(string); strings.TrimSpace(expr) == "" {
+					return fmt.Errorf("cron 类型 schedule 必须包含非空 expr")
+				}
+			case "every":
+				// accept either everyMs (number) or every (string)
+				hasEveryMs := false
+				if v, ok := schedMap["everyMs"]; ok {
+					if num, ok := v.(float64); ok && num > 0 {
+						hasEveryMs = true
+					}
+				}
+				hasEvery := false
+				if v, ok := schedMap["every"].(string); ok && v != "" {
+					hasEvery = true
+				}
+				if !hasEveryMs && !hasEvery {
+					return fmt.Errorf("every 类型 schedule 必须包含正数 everyMs 或非空 every")
+				}
+			case "at":
+				// accept either at (ISO string) or atMs (number)
+				hasAt := false
+				if v, ok := schedMap["at"].(string); ok && v != "" {
+					if _, err := time.Parse(time.RFC3339, v); err != nil {
+						return fmt.Errorf("schedule.at %q 不是有效的 ISO 8601 时间格式 (RFC3339)", v)
+					}
+					hasAt = true
+				}
+				hasAtMs := false
+				if v, ok := schedMap["atMs"]; ok {
+					if num, ok := v.(float64); ok && num > 0 {
+						hasAtMs = true
+					}
+				}
+				if !hasAt && !hasAtMs {
+					return fmt.Errorf("at 类型 schedule 必须包含 ISO 8601 字符串 at 或正数 atMs")
+				}
+			case "":
+				// no kind → skip validation
+			default:
+				return fmt.Errorf("schedule.kind %q 无效，有效值为 cron/every/at", kind)
+			}
+		}
 	}
 	return nil
 }
@@ -984,6 +1266,125 @@ func uniqueStrings(items []string) []string {
 		out = append(out, item)
 	}
 	return out
+}
+
+func resolveSkillConfigTarget(cfg *config.Config, agentID, requested string) (skillInfo, map[string]interface{}, error) {
+	ocConfig, _ := cfg.ReadOpenClawJSON()
+	if ocConfig == nil {
+		ocConfig = map[string]interface{}{}
+	}
+
+	skillsCfg := asMapAny(ocConfig["skills"])
+	skillEntries := asMapAny(skillsCfg["entries"])
+	legacyBlocklist := readLegacySkillBlocklist(skillsCfg)
+	pluginEntries := asMapAny(asMapAny(ocConfig["plugins"])["entries"])
+	pluginInstalls := asMapAny(asMapAny(ocConfig["plugins"])["installs"])
+	plugins := discoverPlugins(cfg, pluginEntries, pluginInstalls)
+	roots := resolveSkillDiscoveryRoots(cfg, ocConfig, plugins, agentID)
+	skills := discoverSkills(roots, skillEntries, legacyBlocklist, resolveBundledSkillAllowlist(ocConfig))
+	for _, skill := range skills {
+		if skill.SkillKey == requested || skill.ID == requested {
+			return skill, ocConfig, nil
+		}
+	}
+	return skillInfo{}, ocConfig, fmt.Errorf("skill %q not found", requested)
+}
+
+func configPathSegments(path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("invalid empty config key")
+	}
+	parts := strings.Split(path, ".")
+	segments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("invalid config key %q", path)
+		}
+		segments = append(segments, part)
+	}
+	return segments, nil
+}
+
+func getNestedConfigValue(root map[string]interface{}, path string) (interface{}, bool, error) {
+	segments, err := configPathSegments(path)
+	if err != nil {
+		return nil, false, err
+	}
+	var current interface{} = root
+	for _, segment := range segments {
+		object, ok := current.(map[string]interface{})
+		if !ok || object == nil {
+			return nil, false, nil
+		}
+		next, exists := object[segment]
+		if !exists {
+			return nil, false, nil
+		}
+		current = next
+	}
+	return current, true, nil
+}
+
+func setNestedConfigValue(root map[string]interface{}, path string, value interface{}) error {
+	segments, err := configPathSegments(path)
+	if err != nil {
+		return err
+	}
+	current := root
+	for _, segment := range segments[:len(segments)-1] {
+		next, exists := current[segment]
+		if !exists || next == nil {
+			child := map[string]interface{}{}
+			current[segment] = child
+			current = child
+			continue
+		}
+		child, ok := next.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("config key %q collides with a non-object at %q", path, segment)
+		}
+		current = child
+	}
+	current[segments[len(segments)-1]] = value
+	return nil
+}
+
+func deleteNestedConfigValue(root map[string]interface{}, path string) error {
+	segments, err := configPathSegments(path)
+	if err != nil {
+		return err
+	}
+	_, err = deleteNestedConfigSegments(root, segments)
+	return err
+}
+
+func deleteNestedConfigSegments(current map[string]interface{}, segments []string) (bool, error) {
+	if len(segments) == 0 {
+		return len(current) == 0, nil
+	}
+	if len(segments) == 1 {
+		delete(current, segments[0])
+		return len(current) == 0, nil
+	}
+
+	next, exists := current[segments[0]]
+	if !exists {
+		return len(current) == 0, nil
+	}
+	child, ok := next.(map[string]interface{})
+	if !ok {
+		return false, nil
+	}
+	empty, err := deleteNestedConfigSegments(child, segments[1:])
+	if err != nil {
+		return false, err
+	}
+	if empty {
+		delete(current, segments[0])
+	}
+	return len(current) == 0, nil
 }
 
 func asMapAny(value interface{}) map[string]interface{} {
