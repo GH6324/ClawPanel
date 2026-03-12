@@ -340,6 +340,7 @@ jobs:
   bundle:
     name: Bundle Release Assets
     needs: [prepare, build-binaries, build-installer, build-lite-packages]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.build-binaries.result == 'success' && needs.build-installer.result != 'failure' && needs.build-installer.result != 'cancelled' && (needs.prepare.outputs.edition != 'lite' || needs.build-lite-packages.result == 'success') }}
     runs-on: ubuntu-24.04
 
     steps:
