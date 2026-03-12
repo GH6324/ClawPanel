@@ -282,6 +282,18 @@ iwr http://39.102.53.188:16198/clawpanel/scripts/uninstall-lite.ps1 -OutFile uni
 sudo systemctl stop clawpanel && sudo rm -rf /opt/clawpanel
 ```
 
+**ClawPanel Pro（macOS）**
+
+```bash
+sudo launchctl unload /Library/LaunchDaemons/com.clawpanel.service.plist && sudo rm -f /Library/LaunchDaemons/com.clawpanel.service.plist && sudo rm -rf /opt/clawpanel
+```
+
+**ClawPanel Pro（Windows）**
+
+```powershell
+sc stop ClawPanel; sc delete ClawPanel; Remove-Item -Recurse -Force C:\ClawPanel
+```
+
 ### 方式二：手动下载运行
 
 从 [Releases](https://github.com/zhaoxinyi02/ClawPanel/releases) 下载对应平台的二进制文件：
