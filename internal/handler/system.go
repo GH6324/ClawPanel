@@ -259,6 +259,23 @@ func candidateOpenClawBins(cfg *config.Config) []string {
 		if launcher := cfg.BundledOpenClawLauncherPath(); launcher != "" {
 			bins = append(bins, launcher)
 		}
+		if entry := strings.TrimSpace(cfg.BundledOpenClawEntrypoint()); entry != "" {
+			bins = append(bins, entry)
+		}
+		seen := map[string]struct{}{}
+		uniq := make([]string, 0, len(bins))
+		for _, bin := range bins {
+			bin = strings.TrimSpace(bin)
+			if bin == "" {
+				continue
+			}
+			if _, ok := seen[bin]; ok {
+				continue
+			}
+			seen[bin] = struct{}{}
+			uniq = append(uniq, bin)
+		}
+		return uniq
 	}
 	if p := config.DetectOpenClawBinaryPath(); p != "" {
 		bins = append(bins, p)

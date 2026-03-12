@@ -484,11 +484,20 @@ func (m *Manager) findInstalledPluginDir(pluginID string) (string, bool) {
 }
 
 func (m *Manager) installViaOpenClawCLI(spec string, logf func(string)) error {
-	bin := config.DetectOpenClawBinaryPath()
-	if strings.TrimSpace(bin) == "" {
-		return fmt.Errorf("未找到 openclaw 可执行文件")
+	var cmd *exec.Cmd
+	var err error
+	if m.cfg != nil && m.cfg.IsLiteEdition() {
+		cmd, err = m.cfg.OpenClawCommand("plugins", "install", spec)
+		if err != nil {
+			return err
+		}
+	} else {
+		bin := config.DetectOpenClawBinaryPath()
+		if strings.TrimSpace(bin) == "" {
+			return fmt.Errorf("未找到 openclaw 可执行文件")
+		}
+		cmd = exec.Command(bin, "plugins", "install", spec)
 	}
-	cmd := exec.Command(bin, "plugins", "install", spec)
 	cmd.Env = config.BuildExecEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -586,11 +595,20 @@ func (m *Manager) UninstallWithProgress(pluginID string, cleanupConfig bool, log
 }
 
 func (m *Manager) uninstallViaOpenClawCLI(pluginID string, logf func(string)) error {
-	bin := config.DetectOpenClawBinaryPath()
-	if strings.TrimSpace(bin) == "" {
-		return fmt.Errorf("未找到 openclaw 可执行文件")
+	var cmd *exec.Cmd
+	var err error
+	if m.cfg != nil && m.cfg.IsLiteEdition() {
+		cmd, err = m.cfg.OpenClawCommand("plugins", "uninstall", pluginID)
+		if err != nil {
+			return err
+		}
+	} else {
+		bin := config.DetectOpenClawBinaryPath()
+		if strings.TrimSpace(bin) == "" {
+			return fmt.Errorf("未找到 openclaw 可执行文件")
+		}
+		cmd = exec.Command(bin, "plugins", "uninstall", pluginID)
 	}
-	cmd := exec.Command(bin, "plugins", "uninstall", pluginID)
 	cmd.Env = config.BuildExecEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

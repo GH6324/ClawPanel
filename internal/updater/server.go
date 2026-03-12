@@ -554,6 +554,15 @@ func (s *Server) handleCheckOCVersion(w http.ResponseWriter, r *http.Request) {
 	if !s.checkToken(w, r) {
 		return
 	}
+	if s.editionCfg.isLiteFullPackage() {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":             true,
+			"currentVersion": "managed-by-lite-package",
+			"latestVersion":  "managed-by-lite-package",
+			"hasUpdate":      false,
+		})
+		return
+	}
 
 	// Get current installed version via 'openclaw --version'
 	currentVersion := "unknown"
@@ -596,6 +605,13 @@ func (s *Server) handleCheckOCVersion(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStartOCUpdate(w http.ResponseWriter, r *http.Request) {
 	s.setCORS(w)
 	if r.Method == "OPTIONS" {
+		return
+	}
+	if s.editionCfg.isLiteFullPackage() {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":    false,
+			"error": "Lite 版使用整包更新，不支持单独更新 OpenClaw",
+		})
 		return
 	}
 	if r.Method != "POST" {
@@ -652,6 +668,11 @@ func (s *Server) handleOCProgress(w http.ResponseWriter, r *http.Request) {
 // --- OpenClaw Update Logic ---
 
 func (s *Server) doOCUpdate() {
+	if s.editionCfg.isLiteFullPackage() {
+		s.setOCError("Lite 版使用整包更新，不支持单独更新 OpenClaw")
+		return
+	}
+
 	// Step 1: Validate
 	s.setOCStep(0, "running", "验证授权中...")
 	s.ocLog("🔐 验证更新授权...")

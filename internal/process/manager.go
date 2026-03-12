@@ -1625,6 +1625,16 @@ func (m *Manager) patchFeishuPluginChannel(ocDir string) {
 
 // findOpenClawBin 查找 openclaw 可执行文件
 func (m *Manager) findOpenClawBin() string {
+	if m.cfg != nil && m.cfg.IsLiteEdition() {
+		if launcher := m.cfg.BundledOpenClawLauncherPath(); launcher != "" {
+			return launcher
+		}
+		if entry := strings.TrimSpace(m.cfg.BundledOpenClawEntrypoint()); entry != "" {
+			return entry
+		}
+		return ""
+	}
+
 	if p := config.DetectOpenClawBinaryPath(); p != "" {
 		return p
 	}

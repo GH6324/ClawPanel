@@ -969,6 +969,28 @@ func (c *Config) OpenClawConfigExists() bool {
 // OpenClawInstalled 检查 OpenClaw 是否已安装（配置文件存在 或 二进制可执行）
 // 解决 npm 安装后配置文件尚未生成但二进制已可用的情况
 func (c *Config) OpenClawInstalled() bool {
+	if c.IsLiteEdition() {
+		if c.OpenClawConfigExists() {
+			return true
+		}
+		if c.OpenClawApp != "" {
+			if _, err := os.Stat(filepath.Join(c.OpenClawApp, "package.json")); err == nil {
+				return true
+			}
+		}
+		if launcher := c.BundledOpenClawLauncherPath(); launcher != "" {
+			return true
+		}
+		entry := c.BundledOpenClawEntrypoint()
+		if fileExists(entry) {
+			return true
+		}
+		if entry != "" && strings.HasSuffix(entry, ".mjs") && c.BundledNodeBinaryPath() != "" {
+			return true
+		}
+		return false
+	}
+
 	// 1. 配置文件存在
 	if c.OpenClawConfigExists() {
 		return true
