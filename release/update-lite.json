@@ -1,12 +1,12 @@
 {
-  "latest_version": "0.1.9",
-  "release_time": "2026-03-12T20:55:00+08:00",
-  "release_note": "## ClawPanel Lite v0.1.9\n\n- GitHub Release 发布后自动同步到 Gitee Release\n- 继续推进 Windows / macOS Lite 预览整包构建\n- 当前仍建议正式使用 Linux Lite，Windows / macOS Lite 建议先在测试环境验证",
+  "latest_version": "0.1.10",
+  "release_time": "2026-03-13T00:20:00+08:00",
+  "release_note": "## ClawPanel Lite v0.1.10\n\n- 修复 fresh Linux Lite 安装后 OpenClaw 与网关离线的问题\n- 默认关闭 memory slot，避免 `memory-core` 缺失导致配置校验失败\n- Lite 服务默认增加 `NODE_OPTIONS=--max-old-space-size=2048`，降低 gateway OOM 风险",
   "download_urls": {
-    "linux_amd64": "https://gitee.com/zxy000006/ClawPanel/releases/download/lite-v0.1.9/clawpanel-lite-core-v0.1.9-linux-amd64.tar.gz",
-    "darwin_amd64": "https://gitee.com/zxy000006/ClawPanel/releases/download/lite-v0.1.9/clawpanel-lite-core-v0.1.9-darwin-amd64.tar.gz",
-    "darwin_arm64": "https://gitee.com/zxy000006/ClawPanel/releases/download/lite-v0.1.9/clawpanel-lite-core-v0.1.9-darwin-arm64.tar.gz",
-    "windows_amd64": "https://gitee.com/zxy000006/ClawPanel/releases/download/lite-v0.1.9/clawpanel-lite-core-v0.1.9-windows-amd64.tar.gz"
+    "linux_amd64": "https://gitee.com/zxy000006/ClawPanel/releases/download/lite-v0.1.10/clawpanel-lite-core-v0.1.10-linux-amd64.tar.gz",
+    "darwin_amd64": "https://github.com/zhaoxinyi02/ClawPanel/releases/download/lite-v0.1.10/clawpanel-lite-core-v0.1.10-darwin-amd64.tar.gz",
+    "darwin_arm64": "https://github.com/zhaoxinyi02/ClawPanel/releases/download/lite-v0.1.10/clawpanel-lite-core-v0.1.10-darwin-arm64.tar.gz",
+    "windows_amd64": "https://github.com/zhaoxinyi02/ClawPanel/releases/download/lite-v0.1.10/clawpanel-lite-core-v0.1.10-windows-amd64.tar.gz"
   },
   "major_change": false,
   "change_warning": ""

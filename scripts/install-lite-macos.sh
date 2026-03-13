@@ -10,7 +10,7 @@ GITEE_RAW_BASE="https://gitee.com/${GITEE_REPO}/raw/main"
 GITEE_META_URL="${GITEE_RAW_BASE}/release/update-lite.json"
 GITEE_RELEASE_BASE="https://gitee.com/${GITEE_REPO}/releases/download"
 GITHUB_RELEASES_API="https://api.github.com/repos/${REPO}/releases?per_page=20"
-DEFAULT_VERSION="0.1.9"
+DEFAULT_VERSION="0.1.10"
 
 RED='\033[31m'
 GREEN='\033[32m'
@@ -142,6 +142,7 @@ if [[ -n "$LOCAL_PACKAGE_PATH" ]]; then
   info "已使用当前目录中的本地 Lite 构建包进行安装。"
 elif [[ "$DOWNLOAD_SOURCE" == github ]]; then
   info "已选择 GitHub（中国香港及境外服务器推荐），失败时自动回退到 Gitee。"
+  download_file "$PRIMARY_URL" "$TMP_DIR/$PACKAGE_NAME" || download_file "$SECONDARY_URL" "$TMP_DIR/$PACKAGE_NAME" || err "下载失败"
 else
   info "已选择 Gitee（中国大陆服务器推荐），失败时自动回退到 GitHub。"
   download_file "$PRIMARY_URL" "$TMP_DIR/$PACKAGE_NAME" || download_file "$SECONDARY_URL" "$TMP_DIR/$PACKAGE_NAME" || err "下载失败"
@@ -181,6 +182,7 @@ cat > "/Library/LaunchDaemons/${SERVICE_LABEL}.plist" <<EOF
   <dict>
     <key>CLAWPANEL_EDITION</key><string>lite</string>
     <key>CLAWPANEL_DATA</key><string>${INSTALL_DIR}/data</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=2048</string>
   </dict>
 </dict>
 </plist>

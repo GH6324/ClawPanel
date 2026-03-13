@@ -299,6 +299,7 @@ main() {
         info "已使用当前目录中的本地构建包进行安装。"
     elif [ "$DOWNLOAD_SOURCE" = "github" ]; then
         info "已选择 GitHub（中国香港及境外服务器推荐），失败时自动回退到 Gitee。"
+        download_with_selected_source "$DOWNLOAD_SOURCE" "$BINARY_FILE" "${INSTALL_DIR}/${BINARY_NAME}" || err "下载失败！请检查网络连接。"
     else
         info "已选择 Gitee（中国大陆服务器推荐），失败时自动回退到 GitHub。"
         download_with_selected_source "$DOWNLOAD_SOURCE" "$BINARY_FILE" "${INSTALL_DIR}/${BINARY_NAME}" || err "下载失败！请检查网络连接。"

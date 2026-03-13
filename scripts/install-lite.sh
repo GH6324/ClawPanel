@@ -13,7 +13,7 @@ GITEE_META_URL="${GITEE_RAW_BASE}/release/update-lite.json"
 GITEE_RELEASE_BASE="https://gitee.com/${GITEE_REPO}/releases/download"
 GITHUB_RELEASES_API="https://api.github.com/repos/${REPO}/releases?per_page=20"
 GITEE_RELEASES_API="https://gitee.com/api/v5/repos/${GITEE_REPO}/releases?per_page=20"
-DEFAULT_VERSION="0.1.9"
+DEFAULT_VERSION="0.1.10"
 
 RED='\033[31m'
 GREEN='\033[32m'
@@ -207,6 +207,7 @@ if [[ -n "$LOCAL_PACKAGE_PATH" ]]; then
   info "已使用当前目录中的本地 Lite 构建包进行安装。"
 elif [[ "$DOWNLOAD_SOURCE" == "github" ]]; then
   info "已选择 GitHub（中国香港及境外服务器推荐），失败时自动回退到 Gitee。"
+  download_with_selected_source "$DOWNLOAD_SOURCE" "$PACKAGE_NAME" "$TMP_DIR/$PACKAGE_NAME" || err "GitHub 和 Gitee 均下载失败，请检查网络后重试。"
 else
   info "已选择 Gitee（中国大陆服务器推荐），失败时自动回退到 GitHub。"
   download_with_selected_source "$DOWNLOAD_SOURCE" "$PACKAGE_NAME" "$TMP_DIR/$PACKAGE_NAME" || err "GitHub 和 Gitee 均下载失败，请检查网络后重试。"
@@ -244,6 +245,8 @@ Restart=always
 RestartSec=5
 Environment=CLAWPANEL_EDITION=lite
 Environment=CLAWPANEL_DATA=${INSTALL_DIR}/data
+Environment=NODE_OPTIONS=--max-old-space-size=2048
+Environment=NODE_OPTIONS=--max-old-space-size=2048
 
 [Install]
 WantedBy=multi-user.target

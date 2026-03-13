@@ -480,17 +480,24 @@ jobs:
           )
           release_id = release['id']
 
+          failed = []
           for asset in sorted(release_dir.glob('*')):
               if not asset.is_file():
                   continue
-              content_type = mimetypes.guess_type(str(asset))[0] or 'application/octet-stream'
               cmd = [
                   'curl', '-fsSL', '-X', 'POST',
+                  '--retry', '3', '--retry-delay', '2',
                   '-F', f'name={asset.name}',
                   '-F', f'file=@{asset}',
                   api_url(f'/releases/{release_id}/attach_files'),
               ]
               env = os.environ.copy()
               env['CURL_CA_BUNDLE'] = env.get('CURL_CA_BUNDLE', '')
-              subprocess.check_call(cmd, env=env)
+              try:
+                  subprocess.check_call(cmd, env=env)
+              except subprocess.CalledProcessError as exc:
+                  failed.append(asset.name)
+                  print(f'WARN: upload failed for {asset.name}: {exc}', file=sys.stderr)
+          if failed:
+              print('WARN: some assets failed to sync to Gitee: ' + ', '.join(failed), file=sys.stderr)
           PY

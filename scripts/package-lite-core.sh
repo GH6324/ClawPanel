@@ -45,14 +45,8 @@ prune_node_runtime() {
 
 prune_openclaw_runtime() {
   local root="$1"
-  rm -rf "$root/docs" "$root/assets" "$root/skills"
+  rm -rf "$root/docs"
   rm -f "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE"
-  if [[ -d "$root/extensions" ]]; then
-    find "$root/extensions" -mindepth 1 -maxdepth 1 -type d \
-      ! -name telegram \
-      ! -name feishu \
-      -exec rm -rf {} +
-  fi
 }
 
 ensure_openclaw_runtime_ready() {
@@ -193,8 +187,19 @@ prepare_openclaw_runtime() {
     return
   fi
   echo "==> 安装 OpenClaw runtime: ${OPENCLAW_VERSION}"
-  npm install --omit=dev --no-package-lock --registry="$NPM_REGISTRY" --prefix "$openclaw_stage" "openclaw@${OPENCLAW_VERSION}" >/dev/null
-  cp -a "$openclaw_stage/node_modules/openclaw" "$openclaw_stage/openclaw"
+  mkdir -p "$openclaw_stage/openclaw"
+  npm install --omit=dev --no-package-lock --registry="$NPM_REGISTRY" --prefix "$openclaw_stage/openclaw" "openclaw@${OPENCLAW_VERSION}" >/dev/null
+  if [[ -d "$openclaw_stage/openclaw/node_modules/openclaw" ]]; then
+    tmp_extract="$openclaw_stage/.openclaw-pkg"
+    rm -rf "$tmp_extract"
+    mv "$openclaw_stage/openclaw/node_modules/openclaw" "$tmp_extract"
+    mkdir -p "$tmp_extract/node_modules"
+    while IFS= read -r dep; do
+      mv "$dep" "$tmp_extract/node_modules/"
+    done < <(find "$openclaw_stage/openclaw/node_modules" -mindepth 1 -maxdepth 1)
+    rm -rf "$openclaw_stage/openclaw"
+    mv "$tmp_extract" "$openclaw_stage/openclaw"
+  fi
   ensure_openclaw_runtime_ready "$openclaw_stage/openclaw" "$node_for_npm"
   rm -rf "$OPENCLAW_CACHE_DIR/openclaw"
   cp -a "$openclaw_stage/openclaw" "$OPENCLAW_CACHE_DIR/openclaw"
@@ -300,6 +305,11 @@ cat > "$STAGE_DIR/data/openclaw-config/openclaw.json" <<'EOF'
   "gateway": {
     "mode": "local",
     "port": 18790
+  },
+  "plugins": {
+    "slots": {
+      "memory": "none"
+    }
   }
 }
 EOF

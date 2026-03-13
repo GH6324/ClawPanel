@@ -9,7 +9,7 @@ $GiteeMeta = "$GiteeRawBase/release/update-lite.json"
 $GiteeReleaseBase = "https://gitee.com/$GiteeRepo/releases/download"
 $InstallDir = "C:\ClawPanelLite"
 $ServiceName = "clawpanel-lite"
-$DefaultVersion = "0.1.9"
+$DefaultVersion = "0.1.10"
 
 function Get-LatestVersionFromGitHub {
   $items = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=20" -UseBasicParsing
@@ -68,6 +68,7 @@ New-Item -ItemType SymbolicLink -Path "C:\Windows\System32\clawlite-openclaw.cmd
 sc.exe delete $ServiceName 2>$null | Out-Null
 Start-Sleep -Seconds 1
 sc.exe create $ServiceName binPath= "`"$InstallDir\clawpanel-lite.exe`"" start= auto DisplayName= "ClawPanel Lite v$Version" | Out-Null
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\$ServiceName" /v Environment /t REG_MULTI_SZ /d "CLAWPANEL_EDITION=lite\0CLAWPANEL_DATA=$InstallDir\data\0NODE_OPTIONS=--max-old-space-size=2048\0" /f | Out-Null
 sc.exe start $ServiceName | Out-Null
 
 Write-Host "ClawPanel Lite for Windows installed at: $InstallDir"
