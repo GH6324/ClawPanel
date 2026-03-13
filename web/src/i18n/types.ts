@@ -349,6 +349,15 @@ export interface Translations {
     skillHubEmpty: string;
     skillHubLoadError: string;
     searchSkillHub: string;
+    skillHubCliInstalled: string;
+    skillHubCliMissing: string;
+    skillHubCliInstall: string;
+    skillHubCliInstalling: string;
+    skillHubCliInstallSuccess: string;
+    skillHubCliInstallFailed: string;
+    skillHubCliRequired: string;
+    skillHubNativeInstall: string;
+    skillHubCliHint: string;
   };
 
   // System Config

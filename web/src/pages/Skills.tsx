@@ -63,6 +63,7 @@ interface SkillHubSkill {
   description: string;
   description_zh: string;
   version: string;
+  homepage?: string;
   tags: string[];
   downloads: number;
   stars: number;
@@ -78,6 +79,15 @@ interface SkillHubCatalog {
   featured: string[];
   categories: Record<string, string[]>;
   skills: SkillHubSkill[];
+}
+
+interface SkillHubStatus {
+  ok: boolean;
+  installed: boolean;
+  binPath?: string;
+  installGuideURL?: string;
+  skillInstallCommand?: string;
+  error?: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -151,7 +161,10 @@ export default function Skills() {
   const [skillHubCategory, setSkillHubCategory] = useState<string>('all');
   const [skillHubView, setSkillHubView] = useState<'featured' | 'category' | 'all'>('featured');
   const [skillHubPage, setSkillHubPage] = useState(1);
-  const [storeView, setStoreView] = useState<'grid5' | 'list2'>('grid5');
+  const [storeView, setStoreView] = useState<'grid5' | 'list'>('grid5');
+  const [skillHubCliStatus, setSkillHubCliStatus] = useState<SkillHubStatus | null>(null);
+  const [skillHubCliLoading, setSkillHubCliLoading] = useState(false);
+  const [skillHubCliInstalling, setSkillHubCliInstalling] = useState(false);
   const skillHubPageSize = 30;
 
   const debouncedHubSearch = useCallback(() => {
@@ -239,11 +252,25 @@ export default function Skills() {
     } finally { setSkillHubLoading(false); }
   };
 
+  const loadSkillHubStatus = async (force = false) => {
+    if (skillHubCliLoading && !force) return;
+    setSkillHubCliLoading(true);
+    try {
+      const r = await api.getSkillHubStatus();
+      if (r.ok) setSkillHubCliStatus(r as SkillHubStatus);
+      else setSkillHubCliStatus({ ok: false, installed: false, error: r.error });
+    } catch (err) {
+      console.error('Failed to load SkillHub CLI status:', err);
+      setSkillHubCliStatus({ ok: false, installed: false, error: t.skills.skillHubCliRequired });
+    } finally { setSkillHubCliLoading(false); }
+  };
+
   useEffect(() => {
-    if (tab === 'clawhub' && hubSource === 'skillhub' && !skillHubCatalog && !skillHubLoading) {
-      loadSkillHub();
+    if (tab === 'clawhub' && hubSource === 'skillhub') {
+      if (!skillHubCatalog && !skillHubLoading) loadSkillHub();
+      if (!skillHubCliStatus && !skillHubCliLoading) loadSkillHubStatus();
     }
-  }, [tab, hubSource]);
+  }, [tab, hubSource, skillHubCatalog, skillHubLoading, skillHubCliStatus, skillHubCliLoading]);
 
   // SkillHub client-side filtering
   const filteredSkillHubSkills = useMemo(() => {
@@ -281,10 +308,35 @@ export default function Skills() {
   // Reset page when filters change
   useEffect(() => { setSkillHubPage(1); }, [skillHubView, skillHubCategory, skillHubSearch]);
 
+  const handleInstallSkillHubCLI = async () => {
+    if (skillHubCliInstalling) return;
+    setSkillHubCliInstalling(true);
+    try {
+      const r = await api.installSkillHubCLI();
+      if (r.ok) {
+        setMsg(t.skills.skillHubCliInstallSuccess);
+        await loadSkillHubStatus(true);
+      } else {
+        setMsg(r.error || t.skills.skillHubCliInstallFailed);
+      }
+    } catch (err) {
+      console.error('Failed to install SkillHub CLI:', err);
+      setMsg(t.skills.skillHubCliInstallFailed);
+    } finally {
+      setSkillHubCliInstalling(false);
+      setTimeout(() => setMsg(''), 3000);
+    }
+  };
+
   const handleInstallSkillHubSkill = async (slug: string) => {
+    if (!skillHubCliStatus?.installed) {
+      setMsg(t.skills.skillHubCliRequired);
+      setTimeout(() => setMsg(''), 3000);
+      return;
+    }
     setInstalling(slug);
     try {
-      const r = await api.installClawHubSkill(slug, selectedAgent);
+      const r = await api.installSkillHubSkill(slug, selectedAgent);
       if (r.ok) {
         setMsg(t.skills.installSuccess.replace('{id}', slug));
         await loadSkills();
@@ -596,8 +648,8 @@ export default function Skills() {
     ? (skillHubCatalog?.total ?? filteredSkillHubSkills.length)
     : (hubTotal || hubFiltered.length || clawHubSkills.length);
   const storeGridClasses = storeView === 'grid5'
-    ? 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5 gap-4'
-    : 'grid grid-cols-1 xl:grid-cols-2 gap-4';
+    ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4'
+    : 'grid grid-cols-1 gap-4';
   const clawHubDescriptionClamp = storeView === 'grid5' ? 'line-clamp-3' : 'line-clamp-4';
   const skillHubDescriptionClamp = storeView === 'grid5' ? 'line-clamp-2' : 'line-clamp-4';
   const skillHubTagLimit = storeView === 'grid5' ? 3 : 6;
@@ -831,8 +883,8 @@ export default function Skills() {
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeView === 'grid5' ? 'bg-white dark:bg-gray-700 text-violet-600 dark:text-violet-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                 {t.skills.storeGridView}
               </button>
-              <button onClick={() => setStoreView('list2')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeView === 'list2' ? 'bg-white dark:bg-gray-700 text-violet-600 dark:text-violet-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+              <button onClick={() => setStoreView('list')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeView === 'list' ? 'bg-white dark:bg-gray-700 text-violet-600 dark:text-violet-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                 {t.skills.storeListView}
               </button>
             </div>
@@ -1019,7 +1071,15 @@ export default function Skills() {
               </div>
               <div>
                 <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t.skills.skillHubTitle || 'SkillHub \u2014 Tencent Cloud'}</h3>
-                <p className="text-xs text-gray-500">{t.skills.skillHubSubtitle || '\u4e2d\u56fd\u955c\u50cf\uff0c\u514c\u5bb9 ClawHub \u63d2\u4ef6\u751f\u6001'}</p>
+                <p className="text-xs text-gray-500">{t.skills.skillHubSubtitle || '\u817e\u8baf\u76ee\u5f55\uff0c\u5b89\u88c5\u8d70\u5b98\u65b9 SkillHub CLI'}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className={`px-2 py-0.5 rounded-full ${skillHubCliStatus?.installed ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400'}`}>
+                    {skillHubCliStatus?.installed ? t.skills.skillHubCliInstalled : t.skills.skillHubCliMissing}
+                  </span>
+                  <span className="text-gray-400 dark:text-gray-500 font-mono">
+                    {skillHubCliStatus?.skillInstallCommand || t.skills.skillHubCliHint}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="flex gap-2">
@@ -1028,6 +1088,13 @@ export default function Skills() {
                 {skillHubLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                 {skillHubLoading ? t.skills.syncing : t.skills.syncStore}
               </button>
+              {!skillHubCliStatus?.installed && (
+                <button onClick={handleInstallSkillHubCLI} disabled={skillHubCliInstalling || skillHubCliLoading}
+                  className={`${modern ? 'page-modern-action' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 shadow-sm transition-colors'} disabled:opacity-50`}>
+                  {skillHubCliInstalling ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                  {skillHubCliInstalling ? t.skills.skillHubCliInstalling : t.skills.skillHubCliInstall}
+                </button>
+              )}
               <a href="https://skillhub.tencent.com/" target="_blank" rel="noopener noreferrer"
                 className={`${modern ? 'page-modern-accent' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-200 dark:shadow-none transition-colors'}`}>
                 <ExternalLink size={14} />{t.skills.visitSite}
@@ -1095,6 +1162,8 @@ export default function Skills() {
               ) : skillHubPagedSkills.map(skill => {
                 const isInstalled = skills.some(s => s.id === skill.slug || s.skillKey === skill.slug);
                 const isInstalling = installing === skill.slug;
+                const skillHubCliReady = skillHubCliStatus?.installed === true;
+                const skillHubLink = skill.homepage || 'https://skillhub.tencent.com/';
                 return (
                   <div key={skill.slug} className={`${modern ? 'relative overflow-hidden rounded-[24px] p-4 border border-white/65 dark:border-slate-700/50 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(237,242,255,0.62))] dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.88),rgba(30,64,175,0.10))] shadow-[0_18px_40px_rgba(15,23,42,0.06)] backdrop-blur-xl flex flex-col h-full' : 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700/50 flex flex-col h-full'} hover:shadow-md transition-all group`}>
                     {modern && <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-white/90 to-transparent dark:via-slate-200/20" />}
@@ -1126,7 +1195,7 @@ export default function Skills() {
                       {skill.owner && <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">by {skill.owner}</p>}
                     </div>
                     <div className="flex items-center gap-2 pt-3 border-t border-gray-50 dark:border-gray-800">
-                      <a href={`https://skillhub.tencent.com/skills/${encodeURIComponent(skill.slug)}`} target="_blank" rel="noopener noreferrer"
+                      <a href={skillHubLink} target="_blank" rel="noopener noreferrer"
                         className={`${modern ? 'page-modern-action p-2' : 'p-2 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors'}`} title="SkillHub">
                         <ExternalLink size={16} />
                       </a>
@@ -1135,10 +1204,12 @@ export default function Skills() {
                           <Check size={14} />{t.common.installed}
                         </span>
                       ) : (
-                        <button onClick={() => handleInstallSkillHubSkill(skill.slug)} disabled={isInstalling}
+                        <button onClick={() => { if (skillHubCliReady) handleInstallSkillHubSkill(skill.slug); else handleInstallSkillHubCLI(); }} disabled={isInstalling || skillHubCliInstalling || skillHubCliLoading}
                           className={`${modern ? 'page-modern-accent flex-1 py-2 text-xs' : 'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded-lg bg-blue-600 dark:bg-blue-500 text-white hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 transition-colors'}`}>
-                          {isInstalling ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                          {t.common.install}
+                          {isInstalling || skillHubCliInstalling ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                          {skillHubCliReady
+                            ? t.skills.skillHubNativeInstall
+                            : (skillHubCliInstalling ? t.skills.skillHubCliInstalling : t.skills.skillHubCliInstall)}
                         </button>
                       )}
                     </div>

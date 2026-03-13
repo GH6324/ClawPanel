@@ -29,6 +29,8 @@ const FAKE_CLAWHUB_SKILLS = [
   { id: 'feishu-notes', name: 'Feishu Notes', description: '将结果整理并发送到飞书文档', version: '0.4.5', installed: false },
 ];
 
+let mockSkillHubCliInstalled = false;
+
 const FAKE_CRON_JOBS = [
   { id: 'cron_1', name: '每日早报', enabled: true, schedule: { kind: 'cron', expr: '0 8 * * *' }, agentId: 'main', sessionTarget: 'main', wakeMode: 'now', payload: { kind: 'text', text: '请生成今日早报，包含科技、AI、财经要闻', deliver: true, channel: 'qq' }, state: { lastRunAtMs: Date.now() - 86400000, lastStatus: 'ok' }, createdAtMs: Date.now() - 604800000 },
   { id: 'cron_2', name: '系统健康检查', enabled: true, schedule: { kind: 'every', everyMs: 1800000 }, agentId: 'main', sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'text', text: '检查系统状态并报告', deliver: false }, state: { lastRunAtMs: Date.now() - 1800000, lastStatus: 'ok' }, createdAtMs: Date.now() - 1209600000 },
@@ -637,14 +639,32 @@ export const mockApi = {
         '\u901a\u8baf\u534f\u4f5c': ['communication', 'slack', 'discord'],
       },
       skills: [
-        { slug: 'github', name: 'Github', description: 'GitHub integration for repository management', description_zh: 'GitHub \u96c6\u6210\u5de5\u5177\uff0c\u652f\u6301\u4ed3\u5e93\u7ba1\u7406\u3001PR\u3001Issue', version: '1.0.1', tags: ['developer', 'git'], downloads: 59000, stars: 198, score: 128858.2, owner: 'clawhub', updated_at: 1772065840450 },
-        { slug: 'openai-whisper', name: 'OpenAI Whisper', description: 'Speech-to-text using OpenAI Whisper', description_zh: 'OpenAI Whisper \u8bed\u97f3\u8f6c\u6587\u5b57', version: '2.1.0', tags: ['ai', 'llm'], downloads: 32000, stars: 156, score: 98234.5, owner: 'clawhub', updated_at: 1772065840450 },
-        { slug: 'sequential-thinking', name: 'Sequential Thinking', description: 'Step-by-step reasoning tool', description_zh: '\u987a\u5e8f\u601d\u7ef4\u63a8\u7406\u5de5\u5177', version: '1.3.2', tags: ['ai', 'productivity'], downloads: 45000, stars: 210, score: 115000, owner: 'clawhub', updated_at: 1772065840450 },
-        { slug: 'browser', name: 'Browser', description: 'Web browsing and scraping tool', description_zh: '\u7f51\u9875\u6d4f\u89c8\u4e0e\u6293\u53d6\u5de5\u5177', version: '1.5.0', tags: ['developer', 'automation'], downloads: 28000, stars: 120, score: 82000, owner: 'clawhub', updated_at: 1772065840450 },
-        { slug: 'google-maps', name: 'Google Maps', description: 'Google Maps integration', description_zh: '\u8c37\u6b4c\u5730\u56fe\u96c6\u6210', version: '1.0.0', tags: ['data', 'visualization'], downloads: 12000, stars: 65, score: 35000, owner: 'clawhub', updated_at: 1772065840450 },
-        { slug: 'skill-vetter', name: 'Skill Vetter', description: 'Skill quality assessment tool', description_zh: '\u6280\u80fd\u8d28\u91cf\u8bc4\u4f30\u5de5\u5177', version: '0.9.0', tags: ['security', 'audit'], downloads: 8000, stars: 42, score: 22000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'github', name: 'Github', description: 'GitHub integration for repository management', description_zh: 'GitHub \u96c6\u6210\u5de5\u5177\uff0c\u652f\u6301\u4ed3\u5e93\u7ba1\u7406\u3001PR\u3001Issue', version: '1.0.1', homepage: 'https://clawhub.ai/skills/github', tags: ['developer', 'git'], downloads: 59000, stars: 198, score: 128858.2, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'openai-whisper', name: 'OpenAI Whisper', description: 'Speech-to-text using OpenAI Whisper', description_zh: 'OpenAI Whisper \u8bed\u97f3\u8f6c\u6587\u5b57', version: '2.1.0', homepage: 'https://clawhub.ai/skills/openai-whisper', tags: ['ai', 'llm'], downloads: 32000, stars: 156, score: 98234.5, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'sequential-thinking', name: 'Sequential Thinking', description: 'Step-by-step reasoning tool', description_zh: '\u987a\u5e8f\u601d\u7ef4\u63a8\u7406\u5de5\u5177', version: '1.3.2', homepage: 'https://clawhub.ai/skills/sequential-thinking', tags: ['ai', 'productivity'], downloads: 45000, stars: 210, score: 115000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'browser', name: 'Browser', description: 'Web browsing and scraping tool', description_zh: '\u7f51\u9875\u6d4f\u89c8\u4e0e\u6293\u53d6\u5de5\u5177', version: '1.5.0', homepage: 'https://clawhub.ai/skills/browser', tags: ['developer', 'automation'], downloads: 28000, stars: 120, score: 82000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'google-maps', name: 'Google Maps', description: 'Google Maps integration', description_zh: '\u8c37\u6b4c\u5730\u56fe\u96c6\u6210', version: '1.0.0', homepage: 'https://clawhub.ai/skills/google-maps', tags: ['data', 'visualization'], downloads: 12000, stars: 65, score: 35000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'skill-vetter', name: 'Skill Vetter', description: 'Skill quality assessment tool', description_zh: '\u6280\u80fd\u8d28\u91cf\u8bc4\u4f30\u5de5\u5177', version: '0.9.0', homepage: 'https://clawhub.ai/skills/skill-vetter', tags: ['security', 'audit'], downloads: 8000, stars: 42, score: 22000, owner: 'clawhub', updated_at: 1772065840450 },
       ],
     };
+  },
+  getSkillHubStatus: async () => {
+    await delay(150);
+    return mockSkillHubCliInstalled
+      ? { ok: true, installed: true, binPath: '/Users/demo/.local/bin/skillhub', installGuideURL: 'https://skillhub.tencent.com/', skillInstallCommand: 'skillhub install <slug>' }
+      : { ok: true, installed: false, installGuideURL: 'https://skillhub.tencent.com/', skillInstallCommand: 'skillhub install <slug>', error: 'SkillHub CLI not found; install SkillHub CLI first' };
+  },
+  installSkillHubCLI: async () => {
+    await delay(1400);
+    mockSkillHubCliInstalled = true;
+    return { ok: true, installed: true, binPath: '/Users/demo/.local/bin/skillhub', output: 'installed cli' };
+  },
+  installSkillHubSkill: async (skillId: string, _agentId?: string) => {
+    await delay(1000);
+    if (!mockSkillHubCliInstalled) {
+      return { ok: false, error: 'SkillHub CLI not found; install SkillHub CLI first', needsCLI: true };
+    }
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, output: `installed ${skillId}` };
   },
   getCronJobs: async () => { await delay(200); return { ok: true, jobs: FAKE_CRON_JOBS }; },
   updateCronJobs: async () => { await delay(300); return { ok: true }; },
