@@ -196,8 +196,8 @@ prepare_openclaw_runtime() {
     mkdir -p "$tmp_extract/node_modules"
     while IFS= read -r dep; do
       dep_name=$(basename "$dep")
-      if [[ -d "$tmp_extract/node_modules/$dep_name" ]]; then
-        cp -a "$dep"/. "$tmp_extract/node_modules/$dep_name/"
+      if [[ -e "$tmp_extract/node_modules/$dep_name" ]]; then
+        : # openclaw already ships its own version of this dep — keep it
       else
         mv "$dep" "$tmp_extract/node_modules/"
       fi
