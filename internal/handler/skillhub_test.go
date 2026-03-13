@@ -364,6 +364,8 @@ func TestInstallSkillHubSkillRunsCommandInSelectedWorkspace(t *testing.T) {
 set -eu
 printf 'pwd=%s\n' "$PWD" > "` + logPath + `"
 printf 'args=%s %s\n' "$1" "$2" >> "` + logPath + `"
+printf 'pythonhttpsverify=%s\n' "${PYTHONHTTPSVERIFY:-}" >> "` + logPath + `"
+printf 'sslnoverify=%s\n' "${SSL_NO_VERIFY:-}" >> "` + logPath + `"
 mkdir -p "$PWD/skills/$2"
 printf 'installed %s' "$2"
 `
@@ -398,6 +400,199 @@ printf 'installed %s' "$2"
 	}
 	if !strings.Contains(logText, "args=install demo-skill") {
 		t.Fatalf("expected install args, got %q", logText)
+	}
+	if !strings.Contains(logText, "pythonhttpsverify=0") || !strings.Contains(logText, "sslnoverify=1") {
+		t.Fatalf("expected SSL bypass envs, got %q", logText)
+	}
+}
+
+func TestInstallSkillHubSkillRejectsExistingWorkspaceTarget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := resetSkillHubTestState(t)
+	defer restore()
+
+	root := resolvedTempDir(t)
+	workspace := filepath.Join(root, "workspace")
+	openClawDir := filepath.Join(root, "openclaw")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+	if err := os.MkdirAll(filepath.Join(workspace, "skills", "demo-skill"), 0o755); err != nil {
+		t.Fatalf("create existing skill dir: %v", err)
+	}
+	binPath := filepath.Join(root, "skillhub")
+	if err := os.WriteFile(binPath, []byte(`#!/bin/sh
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("write fake skillhub: %v", err)
+	}
+	t.Setenv("SKILLHUB_BIN", binPath)
+	skillHubBinaryCandidatePaths = nil
+
+	r := gin.New()
+	r.POST("/system/skillhub/install", InstallSkillHubSkill(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/system/skillhub/install", strings.NewReader(`{"skillId":"demo-skill","agentId":"main"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "already installed") {
+		t.Fatalf("expected friendly conflict message, got %s", w.Body.String())
+	}
+}
+
+func TestInstallSkillHubSkillGlobalTargetRunsInManagedRoot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := resetSkillHubTestState(t)
+	defer restore()
+
+	root := resolvedTempDir(t)
+	workspace := filepath.Join(root, "workspace")
+	openClawDir := filepath.Join(root, "openclaw")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	linkSystemCommands(t, binDir, "mkdir")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+	logPath := filepath.Join(root, "skillhub-global.log")
+	binPath := filepath.Join(root, "skillhub")
+	script := `#!/bin/sh
+set -eu
+printf 'pwd=%s\n' "$PWD" > "` + logPath + `"
+printf 'args=%s %s\n' "$1" "$2" >> "` + logPath + `"
+mkdir -p "$PWD/skills/$2"
+printf 'installed %s' "$2"
+`
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake skillhub: %v", err)
+	}
+	t.Setenv("SKILLHUB_BIN", binPath)
+	t.Setenv("PATH", binDir)
+	skillHubBinaryCandidatePaths = nil
+
+	r := gin.New()
+	r.POST("/system/skillhub/install", InstallSkillHubSkill(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/system/skillhub/install", strings.NewReader(`{"skillId":"demo-skill","agentId":"main","installTarget":"global"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read skillhub log: %v", err)
+	}
+	logText := string(logged)
+	if !strings.Contains(logText, "pwd="+openClawDir) {
+		t.Fatalf("expected managed cwd, got %q", logText)
+	}
+	if _, err := os.Stat(filepath.Join(openClawDir, "skills", "demo-skill")); err != nil {
+		t.Fatalf("expected managed skill dir, got %v", err)
+	}
+}
+
+func TestGetSkillHubCatalogMergesWorkspaceInstallState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := resetSkillHubTestState(t)
+	defer restore()
+
+	root := resolvedTempDir(t)
+	workspace := filepath.Join(root, "workspace")
+	openClawDir := filepath.Join(root, "openclaw")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+
+	skillHubCache = &skillHubCatalog{
+		Total:       2,
+		GeneratedAt: "2026-03-01T13:44:23Z",
+		Featured:    []string{"installed-skill"},
+		Categories:  map[string][]string{"AI 智能": {"ai"}},
+		Skills: []skillHubSkillItem{
+			{Slug: "installed-skill", Name: "Installed Skill"},
+			{Slug: "failed-skill", Name: "Failed Skill"},
+		},
+	}
+	skillHubCacheTime = time.Now()
+	if err := os.MkdirAll(filepath.Join(workspace, "skills", "installed-skill"), 0o755); err != nil {
+		t.Fatalf("create installed skill dir: %v", err)
+	}
+	writeJSON(t, filepath.Join(workspace, ".skillhub", "install-state.json"), map[string]skillHubInstallRecord{
+		"failed-skill": {State: "failed", Message: "SSL certificate verify failed", UpdatedAt: 1772065840450},
+	})
+
+	r := gin.New()
+	r.GET("/system/skillhub/catalog", GetSkillHubCatalog(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/system/skillhub/catalog?agentId=main", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		OK     bool `json:"ok"`
+		Skills []struct {
+			Slug           string `json:"slug"`
+			Installed      bool   `json:"installed"`
+			InstallState   string `json:"installState"`
+			InstallMessage string `json:"installMessage"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Skills) != 2 {
+		t.Fatalf("expected 2 skills, got %+v", resp.Skills)
+	}
+	if !resp.Skills[0].Installed || resp.Skills[0].InstallState != "installed" {
+		t.Fatalf("expected installed skill state, got %+v", resp.Skills[0])
+	}
+	if resp.Skills[1].InstallState != "failed" || !strings.Contains(resp.Skills[1].InstallMessage, "SSL certificate verify failed") {
+		t.Fatalf("expected failed install state, got %+v", resp.Skills[1])
+	}
+}
+
+func TestGetSkillHubCatalogGlobalTargetUsesManagedState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := resetSkillHubTestState(t)
+	defer restore()
+
+	root := resolvedTempDir(t)
+	workspace := filepath.Join(root, "workspace")
+	openClawDir := filepath.Join(root, "openclaw")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+
+	skillHubCache = &skillHubCatalog{
+		Total:       1,
+		GeneratedAt: "2026-03-01T13:44:23Z",
+		Featured:    []string{"managed-skill"},
+		Categories:  map[string][]string{"AI 智能": {"ai"}},
+		Skills: []skillHubSkillItem{
+			{Slug: "managed-skill", Name: "Managed Skill"},
+		},
+	}
+	skillHubCacheTime = time.Now()
+	if err := os.MkdirAll(filepath.Join(openClawDir, "skills", "managed-skill"), 0o755); err != nil {
+		t.Fatalf("create managed skill dir: %v", err)
+	}
+	writeJSON(t, filepath.Join(openClawDir, ".skillhub", "install-state.json"), map[string]skillHubInstallRecord{
+		"managed-skill": {State: "installed", UpdatedAt: 1772065840450},
+	})
+
+	r := gin.New()
+	r.GET("/system/skillhub/catalog", GetSkillHubCatalog(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/system/skillhub/catalog?agentId=main&installTarget=global", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"installTarget":"global"`) || !strings.Contains(w.Body.String(), `"installed":true`) {
+		t.Fatalf("expected global managed install state, got %s", w.Body.String())
 	}
 }
 

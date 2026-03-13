@@ -455,6 +455,74 @@ func TestSearchClawHubMarksExistingSkillDirectoryInstalled(t *testing.T) {
 	}
 }
 
+func TestInstallClawHubSkillGlobalTargetUsesManagedRoot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	root := resolvedTempDir(t)
+	openClawDir := filepath.Join(root, "openclaw")
+	workspace := filepath.Join(root, "workspace", "main")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+	writeJSON(t, filepath.Join(openClawDir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "workspace": workspace},
+			},
+		},
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/skills/weather":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skill": map[string]interface{}{
+					"slug":        "weather",
+					"displayName": "Weather",
+					"summary":     "Public weather skill",
+					"moderation":  map[string]interface{}{"isMalwareBlocked": false},
+				},
+				"latestVersion": map[string]interface{}{"version": "1.2.0"},
+			})
+		case "/api/v1/download":
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(buildZipFixture(t, map[string]string{
+				"weather-1.2.0/SKILL.md":     "---\nname: Weather\ndescription: Public weather skill\n---\nUse weather data.\n",
+				"weather-1.2.0/package.json": `{"name":"weather","description":"Public weather skill"}`,
+			}))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	oldClient := clawHubHTTPClient
+	clawHubHTTPClient = server.Client()
+	defer func() { clawHubHTTPClient = oldClient }()
+	t.Setenv("CLAWHUB_SITE", server.URL)
+
+	r := gin.New()
+	r.POST("/system/clawhub/install", InstallClawHubSkill(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/system/clawhub/install", bytes.NewReader([]byte(`{"skillId":"weather","agentId":"main","installTarget":"global"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(openClawDir, "skills", "weather", "SKILL.md")); err != nil {
+		t.Fatalf("expected managed skill install, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "skills", "weather")); !os.IsNotExist(err) {
+		t.Fatalf("expected workspace skills dir untouched, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(openClawDir, ".clawhub", "lock.json")); err != nil {
+		t.Fatalf("expected managed lock file, got %v", err)
+	}
+	if !strings.Contains(w.Body.String(), `"installTarget":"global"`) {
+		t.Fatalf("expected global install target in response, got %s", w.Body.String())
+	}
+}
+
 func TestSearchClawHubUsesSiteForPublicLinksWhenRegistryOverrideSet(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

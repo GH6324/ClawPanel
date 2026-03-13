@@ -591,7 +591,7 @@ export const mockApi = {
     return { ok: true, skillId: skill?.id || skillId, skillKey: skill?.skillKey || skillId, configKeys, values: snapshot };
   },
   syncClawHub: async () => { await delay(800); return { ok: true, skills: [] }; },
-  searchClawHub: async (query?: string, _agentId?: string, page?: number, limit?: number) => {
+  searchClawHub: async (query?: string, _agentId?: string, page?: number, limit?: number, _installTarget?: 'agent' | 'global') => {
     await delay(500);
     const q = (query || '').toLowerCase();
     const all = q
@@ -607,13 +607,13 @@ export const mockApi = {
     const skills = all.slice(start, start + l);
     return { ok: true, registryBase: 'https://clawhub.ai', skills: JSON.parse(JSON.stringify(skills)), page: p, limit: l, total: all.length };
   },
-  installClawHubSkill: async (skillId: string, _agentId?: string) => {
+  installClawHubSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
     await delay(800);
-    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, version: '1.0.0' };
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent', version: '1.0.0' };
   },
-  uninstallSkill: async (skillId: string, _agentId?: string) => {
+  uninstallSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
     await delay(600);
-    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default };
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent' };
   },
   checkSkillDeps: async (env?: string[], bins?: string[], anyBins?: string[]) => {
     await delay(300);
@@ -623,7 +623,7 @@ export const mockApi = {
     const allMet = envR.every(r => r.found) && binR.every(r => r.found) && (anyR.length === 0 || anyR.some(r => r.found));
     return { ok: true, allMet, env: envR, bins: binR, anyBins: anyR };
   },
-  getSkillHubCatalog: async () => {
+  getSkillHubCatalog: async (_agentId?: string, _installTarget?: 'agent' | 'global') => {
     await delay(600);
     return {
       ok: true, total: 12911,
@@ -659,12 +659,12 @@ export const mockApi = {
     mockSkillHubCliInstalled = true;
     return { ok: true, installed: true, binPath: '/Users/demo/.local/bin/skillhub', output: 'installed cli' };
   },
-  installSkillHubSkill: async (skillId: string, _agentId?: string) => {
+  installSkillHubSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
     await delay(1000);
     if (!mockSkillHubCliInstalled) {
       return { ok: false, error: 'SkillHub CLI not found; install SkillHub CLI first', needsCLI: true };
     }
-    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, output: `installed ${skillId}` };
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent', output: `installed ${skillId}` };
   },
   getCronJobs: async () => { await delay(200); return { ok: true, jobs: FAKE_CRON_JOBS }; },
   updateCronJobs: async () => { await delay(300); return { ok: true }; },

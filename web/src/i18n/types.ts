@@ -337,6 +337,22 @@ export interface Translations {
     srcExtraDir: string;
     srcScript: string;
     srcConfig: string;
+    scopeFilterAll: string;
+    scopeFilterCurrentAgent: string;
+    scopeFilterGlobalShared: string;
+    scopeFilterBuiltIn: string;
+    scopeFilterPlugin: string;
+    scopeFilterCustom: string;
+    scopeBadgeCurrentAgent: string;
+    scopeBadgeGlobalShared: string;
+    scopeBadgeBuiltIn: string;
+    scopeBadgePlugin: string;
+    scopeBadgeCustom: string;
+    installTargetLabel: string;
+    installTargetAgent: string;
+    installTargetGlobal: string;
+    installTargetAgentHint: string;
+    installTargetGlobalHint: string;
     storeGridView: string;
     storeListView: string;
     skillHub: string;
@@ -358,6 +374,10 @@ export interface Translations {
     skillHubCliRequired: string;
     skillHubNativeInstall: string;
     skillHubCliHint: string;
+    skillHubInstallFailedTag: string;
+    bulkInstallStore: string;
+    bulkInstallingStore: string;
+    bulkInstallStoreResult: string;
   };
 
   // System Config

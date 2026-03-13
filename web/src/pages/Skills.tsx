@@ -64,6 +64,10 @@ interface SkillHubSkill {
   description_zh: string;
   version: string;
   homepage?: string;
+  installed?: boolean;
+  installState?: string;
+  installMessage?: string;
+  lastInstallAt?: number;
   tags: string[];
   downloads: number;
   stars: number;
@@ -89,6 +93,9 @@ interface SkillHubStatus {
   skillInstallCommand?: string;
   error?: string;
 }
+
+type SkillScopeFilter = 'all' | 'current-agent' | 'global-shared' | 'built-in' | 'plugin' | 'custom';
+type StoreInstallTarget = 'agent' | 'global';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -133,9 +140,10 @@ export default function Skills() {
   const [tab, setTab] = useState<'skills' | 'plugins' | 'clawhub'>('skills');
   const [msg, setMsg] = useState('');
   const [installing, setInstalling] = useState('');
+  const [bulkInstallingStore, setBulkInstallingStore] = useState(false);
   const [uninstalling, setUninstalling] = useState('');
   const [updating, setUpdating] = useState('');
-  const [confirmUninstall, setConfirmUninstall] = useState<{ id: string; name: string } | null>(null);
+  const [confirmUninstall, setConfirmUninstall] = useState<{ id: string; name: string; installTarget: StoreInstallTarget } | null>(null);
   const [detailSkill, setDetailSkill] = useState<any | null>(null);
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
@@ -149,6 +157,7 @@ export default function Skills() {
   const [hubTotal, setHubTotal] = useState(0);
   const hubLimit = 30;
   const [depResults, setDepResults] = useState<Record<string, { allMet: boolean; missing: string[] }>>({});
+  const [scopeFilter, setScopeFilter] = useState<SkillScopeFilter>('all');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const configImportRef = useRef<HTMLInputElement>(null);
 
@@ -162,6 +171,7 @@ export default function Skills() {
   const [skillHubView, setSkillHubView] = useState<'featured' | 'category' | 'all'>('featured');
   const [skillHubPage, setSkillHubPage] = useState(1);
   const [storeView, setStoreView] = useState<'grid5' | 'list'>('grid5');
+  const [storeInstallTarget, setStoreInstallTarget] = useState<StoreInstallTarget>('agent');
   const [skillHubCliStatus, setSkillHubCliStatus] = useState<SkillHubStatus | null>(null);
   const [skillHubCliLoading, setSkillHubCliLoading] = useState(false);
   const [skillHubCliInstalling, setSkillHubCliInstalling] = useState(false);
@@ -174,7 +184,7 @@ export default function Skills() {
 
   useEffect(() => { loadAgents(); }, []);
   useEffect(() => { loadSkills(); }, [selectedAgent]);
-  useEffect(() => { if (tab === 'clawhub') loadClawHub(); }, [tab, selectedAgent]);
+  useEffect(() => { if (tab === 'clawhub') loadClawHub(); }, [tab, selectedAgent, storeInstallTarget]);
   useEffect(() => { return () => { if (debounceRef.current) clearTimeout(debounceRef.current); }; }, []);
 
   const loadAgents = async () => {
@@ -225,7 +235,7 @@ export default function Skills() {
     setHubLoading(true);
     const p = page ?? hubPage;
     try {
-      const r = await api.searchClawHub(search, selectedAgent, p, hubLimit);
+      const r = await api.searchClawHub(search, selectedAgent, p, hubLimit, storeInstallTarget);
       if (r.ok && r.skills) {
         setClawHubSkills(r.skills || []);
         setClawHubRegistryBase(normalizeClawHubRegistryBase(r.registryBase));
@@ -243,7 +253,7 @@ export default function Skills() {
     setSkillHubLoading(true);
     setSkillHubError('');
     try {
-      const r = await api.getSkillHubCatalog();
+      const r = await api.getSkillHubCatalog(selectedAgent, storeInstallTarget);
       if (r.ok) setSkillHubCatalog(r as SkillHubCatalog);
       else setSkillHubError(r.error || t.skills.skillHubLoadError);
     } catch (err) {
@@ -266,11 +276,59 @@ export default function Skills() {
   };
 
   useEffect(() => {
-    if (tab === 'clawhub' && hubSource === 'skillhub') {
+    if (tab === 'clawhub') {
       if (!skillHubCatalog && !skillHubLoading) loadSkillHub();
-      if (!skillHubCliStatus && !skillHubCliLoading) loadSkillHubStatus();
+      if (hubSource === 'skillhub' && !skillHubCliStatus && !skillHubCliLoading) loadSkillHubStatus();
     }
-  }, [tab, hubSource, skillHubCatalog, skillHubLoading, skillHubCliStatus, skillHubCliLoading]);
+  }, [tab, hubSource, selectedAgent, storeInstallTarget, skillHubCatalog, skillHubLoading, skillHubCliStatus, skillHubCliLoading]);
+
+  useEffect(() => {
+    if (tab === 'clawhub') {
+      loadSkillHub();
+    }
+  }, [selectedAgent, storeInstallTarget]);
+
+  const getSkillScope = (source: string): Exclude<SkillScopeFilter, 'all'> => {
+    switch (source) {
+      case 'workspace':
+      case 'workspace-agent':
+      case 'installed':
+        return 'current-agent';
+      case 'managed':
+      case 'global-agent':
+        return 'global-shared';
+      case 'app-skill':
+        return 'built-in';
+      case 'plugin-skill':
+        return 'plugin';
+      default:
+        return 'custom';
+    }
+  };
+
+  const getSkillScopeBadge = (source: string) => {
+    const scope = getSkillScope(source);
+    const badges: Record<Exclude<SkillScopeFilter, 'all'>, { label: string; color: string }> = {
+      'current-agent': { label: t.skills.scopeBadgeCurrentAgent, color: 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300' },
+      'global-shared': { label: t.skills.scopeBadgeGlobalShared, color: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' },
+      'built-in': { label: t.skills.scopeBadgeBuiltIn, color: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300' },
+      plugin: { label: t.skills.scopeBadgePlugin, color: 'bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300' },
+      custom: { label: t.skills.scopeBadgeCustom, color: 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300' },
+    };
+    const badge = badges[scope];
+    return <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${badge.color}`}>{badge.label}</span>;
+  };
+
+  const getLocalSkillInstallTarget = (skill: SkillEntry): StoreInstallTarget => (
+    skill.source === 'managed' || skill.source === 'global-agent' ? 'global' : 'agent'
+  );
+
+  const isSkillInTarget = (skill: SkillEntry, target: StoreInstallTarget) => getLocalSkillInstallTarget(skill) === target;
+
+  const matchesSkillSlugInTarget = (slug: string, target: StoreInstallTarget) => skills.some(s => (
+    isSkillInTarget(s, target) &&
+    (s.id === slug || s.skillKey === slug || s.path?.split(/[\\/]/).pop() === slug)
+  ));
 
   // SkillHub client-side filtering
   const filteredSkillHubSkills = useMemo(() => {
@@ -336,17 +394,62 @@ export default function Skills() {
     }
     setInstalling(slug);
     try {
-      const r = await api.installSkillHubSkill(slug, selectedAgent);
+      const r = await api.installSkillHubSkill(slug, selectedAgent, storeInstallTarget);
       if (r.ok) {
         setMsg(t.skills.installSuccess.replace('{id}', slug));
-        await loadSkills();
+        await Promise.all([loadSkills(), loadSkillHub()]);
       } else {
         setMsg(r.error || t.skills.installFailed.replace('{id}', slug));
+        await loadSkillHub();
       }
     } catch (err) {
       setMsg(t.skills.installFailed.replace('{id}', slug));
+      await loadSkillHub();
     } finally {
       setInstalling('');
+      setTimeout(() => setMsg(''), 3000);
+    }
+  };
+
+  const isSkillHubInstalled = (skill: SkillHubSkill) => !!skill.installed || matchesSkillSlugInTarget(skill.slug, storeInstallTarget);
+
+  const handleBulkInstallStore = async () => {
+    if (bulkInstallingStore) return;
+    const clawHubTargets = hubFiltered.filter(skill => !skill.installed);
+    const skillHubTargets = skillHubPagedSkills.filter(skill => !isSkillHubInstalled(skill));
+    const total = hubSource === 'clawhub' ? clawHubTargets.length : skillHubTargets.length;
+    if (total === 0) return;
+
+    setBulkInstallingStore(true);
+    let ok = 0;
+    try {
+      if (hubSource === 'clawhub') {
+        for (const skill of clawHubTargets) {
+          const r = await api.installClawHubSkill(skill.id, selectedAgent, storeInstallTarget);
+          if (r.ok) ok++;
+        }
+        await Promise.all([loadClawHub(hubPage), loadSkills()]);
+      } else {
+        if (!skillHubCliStatus?.installed) {
+          const cli = await api.installSkillHubCLI();
+          if (!cli.ok) {
+            setMsg(cli.error || t.skills.skillHubCliInstallFailed);
+            return;
+          }
+          await loadSkillHubStatus(true);
+        }
+        for (const skill of skillHubTargets) {
+          const r = await api.installSkillHubSkill(skill.slug, selectedAgent, storeInstallTarget);
+          if (r.ok) ok++;
+        }
+        await Promise.all([loadSkillHub(), loadSkills()]);
+      }
+      setMsg(t.skills.bulkInstallStoreResult.replace('{ok}', String(ok)).replace('{total}', String(total)));
+    } catch (err) {
+      console.error('Failed to bulk install store skills:', err);
+      setMsg(t.common.operationFailed);
+    } finally {
+      setBulkInstallingStore(false);
       setTimeout(() => setMsg(''), 3000);
     }
   };
@@ -414,7 +517,7 @@ export default function Skills() {
   const handleInstallSkill = async (skillId: string) => {
     setInstalling(skillId);
     try {
-      const r = await api.installClawHubSkill(skillId, selectedAgent);
+      const r = await api.installClawHubSkill(skillId, selectedAgent, storeInstallTarget);
       if (r.ok) {
         setMsg(t.skills.installSuccess.replace('{id}', skillId));
         // Refresh local skills
@@ -432,11 +535,11 @@ export default function Skills() {
     }
   };
 
-  const handleUninstallSkill = async (skillId: string) => {
+  const handleUninstallSkill = async (skillId: string, installTarget: StoreInstallTarget = 'agent') => {
     setConfirmUninstall(null);
     setUninstalling(skillId);
     try {
-      const r = await api.uninstallSkill(skillId, selectedAgent);
+      const r = await api.uninstallSkill(skillId, selectedAgent, installTarget);
       if (r.ok) {
         setMsg(t.skills.uninstallSuccess.replace('{id}', skillId));
         await loadSkills();
@@ -455,7 +558,7 @@ export default function Skills() {
   const handleUpdateSkill = async (skillId: string) => {
     setUpdating(skillId);
     try {
-      const r = await api.installClawHubSkill(skillId, selectedAgent);
+      const r = await api.installClawHubSkill(skillId, selectedAgent, storeInstallTarget);
       if (r.ok) {
         setMsg(t.skills.updateSuccess.replace('{id}', skillId));
         await loadSkills();
@@ -629,6 +732,7 @@ export default function Skills() {
   const filtered = skills.filter(s => {
     if (filter === 'enabled' && !s.enabled) return false;
     if (filter === 'disabled' && s.enabled) return false;
+    if (scopeFilter !== 'all' && getSkillScope(s.source) !== scopeFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       return s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q);
@@ -644,15 +748,24 @@ export default function Skills() {
   });
   const hubCategories = Array.from(new Set(clawHubSkills.map(s => s.category).filter(Boolean) as string[])).sort();
   const clawHubSiteUrl = buildClawHubLink(clawHubRegistryBase, '/skills?sort=downloads');
-  const storeBadgeCount = hubSource === 'skillhub'
-    ? (skillHubCatalog?.total ?? filteredSkillHubSkills.length)
-    : (hubTotal || hubFiltered.length || clawHubSkills.length);
+  const storeBadgeCount = (hubTotal || clawHubSkills.length) + (skillHubCatalog?.total ?? 0);
   const storeGridClasses = storeView === 'grid5'
     ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4'
     : 'grid grid-cols-1 gap-4';
   const clawHubDescriptionClamp = storeView === 'grid5' ? 'line-clamp-3' : 'line-clamp-4';
   const skillHubDescriptionClamp = storeView === 'grid5' ? 'line-clamp-2' : 'line-clamp-4';
   const skillHubTagLimit = storeView === 'grid5' ? 3 : 6;
+  const installableStoreCount = hubSource === 'clawhub'
+    ? hubFiltered.filter(skill => !skill.installed).length
+    : skillHubPagedSkills.filter(skill => !isSkillHubInstalled(skill)).length;
+  const scopeFilters: Array<{ key: SkillScopeFilter; label: string }> = [
+    { key: 'all', label: t.skills.scopeFilterAll },
+    { key: 'current-agent', label: t.skills.scopeFilterCurrentAgent },
+    { key: 'global-shared', label: t.skills.scopeFilterGlobalShared },
+    { key: 'built-in', label: t.skills.scopeFilterBuiltIn },
+    { key: 'plugin', label: t.skills.scopeFilterPlugin },
+    { key: 'custom', label: t.skills.scopeFilterCustom },
+  ];
 
   const getSourceBadge = (source: string) => {
     const badges: Record<string, { label: string; color: string }> = {
@@ -734,6 +847,14 @@ export default function Skills() {
               ))}
             </div>
           </div>
+          <div className={`${modern ? 'flex flex-wrap gap-1 p-1 rounded-xl border border-blue-100/70 bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(239,246,255,0.56))] dark:bg-[linear-gradient(145deg,rgba(10,20,36,0.82),rgba(30,64,175,0.08))] dark:border-blue-800/20 backdrop-blur-xl' : 'flex flex-wrap gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg'}`}>
+            {scopeFilters.map(item => (
+              <button key={item.key} onClick={() => setScopeFilter(item.key)}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-all font-medium border ${scopeFilter === item.key ? (modern ? 'border-blue-100/80 bg-blue-50/80 dark:bg-blue-900/20 dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm' : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm') : (modern ? 'border-transparent text-gray-500 hover:bg-white/70 dark:hover:bg-slate-800/70 hover:text-gray-700 dark:hover:text-gray-300' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300')}`}>
+                {item.label}
+              </button>
+            ))}
+          </div>
 
           {/* Bulk actions bar */}
           {selectedSkills.size > 0 && (
@@ -784,6 +905,7 @@ export default function Skills() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{skill.name}</span>
                         {skill.version && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 font-mono shrink-0">v{skill.version}</span>}
+                        {getSkillScopeBadge(skill.source)}
                         {getSourceBadge(skill.source)}
                       </div>
                       {skill.description && <p className="text-xs text-gray-500 truncate mt-0.5">{skill.description}</p>}
@@ -795,9 +917,9 @@ export default function Skills() {
                           {t.skills.configRequired}
                         </button>
                       )}
-                      {(skill.source === 'workspace' || skill.source === 'installed') && (
+                      {(skill.source === 'workspace' || skill.source === 'installed' || skill.source === 'managed') && (
                         <button
-                          onClick={() => setConfirmUninstall({ id: skill.skillKey || skill.id, name: skill.name })}
+                          onClick={() => setConfirmUninstall({ id: skill.skillKey || skill.id, name: skill.name, installTarget: getLocalSkillInstallTarget(skill) })}
                           disabled={uninstalling === (skill.skillKey || skill.id)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors shrink-0 disabled:opacity-50"
                           title={t.skills.uninstall}
@@ -879,6 +1001,18 @@ export default function Skills() {
             </div>
 
             <div className="flex items-center gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
+              <span className="px-2 text-xs font-medium text-gray-500 dark:text-gray-400">{t.skills.installTargetLabel}</span>
+              <button onClick={() => setStoreInstallTarget('agent')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeInstallTarget === 'agent' ? 'bg-white dark:bg-gray-700 text-violet-600 dark:text-violet-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                {t.skills.installTargetAgent}
+              </button>
+              <button onClick={() => setStoreInstallTarget('global')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeInstallTarget === 'global' ? 'bg-white dark:bg-gray-700 text-emerald-600 dark:text-emerald-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                {t.skills.installTargetGlobal}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
               <button onClick={() => setStoreView('grid5')}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${storeView === 'grid5' ? 'bg-white dark:bg-gray-700 text-violet-600 dark:text-violet-300 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                 {t.skills.storeGridView}
@@ -901,9 +1035,15 @@ export default function Skills() {
               <div>
                 <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t.skills.clawHubTitle}</h3>
                 <p className="text-xs text-gray-500">{t.skills.clawHubSubtitle}</p>
+                <p className="text-[11px] text-gray-400 mt-1">{storeInstallTarget === 'agent' ? t.skills.installTargetAgentHint : t.skills.installTargetGlobalHint}</p>
               </div>
             </div>
             <div className="flex gap-2">
+              <button onClick={handleBulkInstallStore} disabled={bulkInstallingStore || hubLoading || installableStoreCount === 0}
+                className={`${modern ? 'page-modern-action' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 shadow-sm transition-colors'} disabled:opacity-50`}>
+                {bulkInstallingStore ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                {bulkInstallingStore ? t.skills.bulkInstallingStore : t.skills.bulkInstallStore}
+              </button>
               <button onClick={handleSearchClawHub} disabled={hubLoading}
                 className={`${modern ? 'page-modern-action' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 shadow-sm transition-colors'}`}>
                 {hubLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -1022,7 +1162,7 @@ export default function Skills() {
                             </button>
                           ) : (
                             <button
-                              onClick={() => setConfirmUninstall({ id: skill.id, name: skill.name })}
+                              onClick={() => setConfirmUninstall({ id: skill.id, name: skill.name, installTarget: storeInstallTarget })}
                               disabled={uninstalling === skill.id}
                               className={`${modern ? 'page-modern-action flex-1 py-2 text-xs text-red-500 hover:text-red-600' : 'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors disabled:opacity-50'}`}>
                               {uninstalling === skill.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
@@ -1072,6 +1212,7 @@ export default function Skills() {
               <div>
                 <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t.skills.skillHubTitle || 'SkillHub \u2014 Tencent Cloud'}</h3>
                 <p className="text-xs text-gray-500">{t.skills.skillHubSubtitle || '\u817e\u8baf\u76ee\u5f55\uff0c\u5b89\u88c5\u8d70\u5b98\u65b9 SkillHub CLI'}</p>
+                <p className="text-[11px] text-gray-400 mt-1">{storeInstallTarget === 'agent' ? t.skills.installTargetAgentHint : t.skills.installTargetGlobalHint}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
                   <span className={`px-2 py-0.5 rounded-full ${skillHubCliStatus?.installed ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400'}`}>
                     {skillHubCliStatus?.installed ? t.skills.skillHubCliInstalled : t.skills.skillHubCliMissing}
@@ -1083,6 +1224,11 @@ export default function Skills() {
               </div>
             </div>
             <div className="flex gap-2">
+              <button onClick={handleBulkInstallStore} disabled={bulkInstallingStore || skillHubLoading || installableStoreCount === 0}
+                className={`${modern ? 'page-modern-action' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 shadow-sm transition-colors'} disabled:opacity-50`}>
+                {bulkInstallingStore ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                {bulkInstallingStore ? t.skills.bulkInstallingStore : t.skills.bulkInstallStore}
+              </button>
               <button onClick={loadSkillHub} disabled={skillHubLoading}
                 className={`${modern ? 'page-modern-action' : 'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 shadow-sm transition-colors'}`}>
                 {skillHubLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -1160,8 +1306,9 @@ export default function Skills() {
                   <p className="text-sm">{t.skills.noSkillsFound}</p>
                 </div>
               ) : skillHubPagedSkills.map(skill => {
-                const isInstalled = skills.some(s => s.id === skill.slug || s.skillKey === skill.slug);
+                const isInstalled = isSkillHubInstalled(skill);
                 const isInstalling = installing === skill.slug;
+                const installFailed = !isInstalled && skill.installState === 'failed';
                 const skillHubCliReady = skillHubCliStatus?.installed === true;
                 const skillHubLink = skill.homepage || 'https://skillhub.tencent.com/';
                 return (
@@ -1178,6 +1325,7 @@ export default function Skills() {
                             {skill.version && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 font-mono">v{skill.version}</span>}
                             {skill.score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 flex items-center gap-0.5"><TrendingUp size={9} />{skill.score}</span>}
                             {isInstalled && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400">{t.common.installed}</span>}
+                            {installFailed && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400" title={skill.installMessage || t.skills.skillHubInstallFailedTag}>{t.skills.skillHubInstallFailedTag}</span>}
                           </div>
                         </div>
                       </div>
@@ -1191,6 +1339,9 @@ export default function Skills() {
                           ))}
                           {skill.tags.length > skillHubTagLimit && <span className="text-[10px] text-gray-400">+{skill.tags.length - skillHubTagLimit}</span>}
                         </div>
+                      )}
+                      {installFailed && skill.installMessage && (
+                        <p className="text-[11px] text-red-500 dark:text-red-400 mt-2 line-clamp-2" title={skill.installMessage}>{skill.installMessage}</p>
                       )}
                       {skill.owner && <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">by {skill.owner}</p>}
                     </div>
@@ -1455,7 +1606,7 @@ export default function Skills() {
                   className={`${modern ? 'page-modern-action px-4 py-2 text-xs' : 'px-4 py-2 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors'}`}>
                   {t.common.cancel}
                 </button>
-                <button onClick={() => handleUninstallSkill(confirmUninstall.id)}
+                <button onClick={() => handleUninstallSkill(confirmUninstall.id, confirmUninstall.installTarget)}
                   className={`${modern ? 'page-modern-accent px-4 py-2 text-xs bg-red-600 hover:bg-red-700' : 'px-4 py-2 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors'}`}>
                   {t.skills.uninstall}
                 </button>

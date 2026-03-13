@@ -48,18 +48,28 @@ type skillHubSkillItem struct {
 
 // trimmed item for API response (keep homepage so UI can link to a real detail page)
 type skillHubSkillTrimmed struct {
-	Slug          string   `json:"slug"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	DescriptionZh string   `json:"description_zh"`
-	Version       string   `json:"version"`
-	Homepage      string   `json:"homepage,omitempty"`
-	Tags          []string `json:"tags"`
-	Downloads     int      `json:"downloads"`
-	Stars         int      `json:"stars"`
-	UpdatedAt     int64    `json:"updated_at"`
-	Score         float64  `json:"score"`
-	Owner         string   `json:"owner"`
+	Slug           string   `json:"slug"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	DescriptionZh  string   `json:"description_zh"`
+	Version        string   `json:"version"`
+	Homepage       string   `json:"homepage,omitempty"`
+	Installed      bool     `json:"installed,omitempty"`
+	InstallState   string   `json:"installState,omitempty"`
+	InstallMessage string   `json:"installMessage,omitempty"`
+	LastInstallAt  int64    `json:"lastInstallAt,omitempty"`
+	Tags           []string `json:"tags"`
+	Downloads      int      `json:"downloads"`
+	Stars          int      `json:"stars"`
+	UpdatedAt      int64    `json:"updated_at"`
+	Score          float64  `json:"score"`
+	Owner          string   `json:"owner"`
+}
+
+type skillHubInstallRecord struct {
+	State     string `json:"state"`
+	Message   string `json:"message,omitempty"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 var (
@@ -270,22 +280,32 @@ func loadSkillHubCatalog() (*skillHubCatalog, error) {
 	}
 }
 
-func trimSkillHubSkills(skills []skillHubSkillItem) []skillHubSkillTrimmed {
+func trimSkillHubSkills(skills []skillHubSkillItem, installState map[string]skillHubInstallRecord, installedDirs map[string]struct{}) []skillHubSkillTrimmed {
 	out := make([]skillHubSkillTrimmed, len(skills))
 	for i, s := range skills {
+		record := installState[s.Slug]
+		_, installed := installedDirs[s.Slug]
+		if installed {
+			record.State = "installed"
+			record.Message = ""
+		}
 		out[i] = skillHubSkillTrimmed{
-			Slug:          s.Slug,
-			Name:          s.Name,
-			Description:   s.Description,
-			DescriptionZh: s.DescriptionZh,
-			Version:       s.Version,
-			Homepage:      strings.TrimSpace(s.Homepage),
-			Tags:          s.Tags,
-			Downloads:     s.Downloads,
-			Stars:         s.Stars,
-			UpdatedAt:     s.UpdatedAt,
-			Score:         s.Score,
-			Owner:         s.Owner,
+			Slug:           s.Slug,
+			Name:           s.Name,
+			Description:    s.Description,
+			DescriptionZh:  s.DescriptionZh,
+			Version:        s.Version,
+			Homepage:       strings.TrimSpace(s.Homepage),
+			Installed:      installed,
+			InstallState:   record.State,
+			InstallMessage: record.Message,
+			LastInstallAt:  record.UpdatedAt,
+			Tags:           s.Tags,
+			Downloads:      s.Downloads,
+			Stars:          s.Stars,
+			UpdatedAt:      s.UpdatedAt,
+			Score:          s.Score,
+			Owner:          s.Owner,
 		}
 	}
 	return out
@@ -305,15 +325,152 @@ func GetSkillHubCatalog(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		agentID, err := resolveRequestedAgentID(cfg, c.Query("agentId"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		workdir, installTarget, err := resolveSkillInstallBase(cfg, agentID, c.Query("installTarget"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		installState := map[string]skillHubInstallRecord{}
+		installedDirs := map[string]struct{}{}
+		if state, err := readSkillHubInstallState(workdir); err == nil {
+			installState = state
+		}
+		if dirs, err := listInstalledSkillDirs(workdir); err == nil {
+			installedDirs = dirs
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"ok":          true,
-			"total":       catalog.Total,
-			"generatedAt": catalog.GeneratedAt,
-			"featured":    catalog.Featured,
-			"categories":  catalog.Categories,
-			"skills":      trimSkillHubSkills(catalog.Skills),
+			"ok":            true,
+			"agentId":       agentID,
+			"installTarget": installTarget,
+			"total":         catalog.Total,
+			"generatedAt":   catalog.GeneratedAt,
+			"featured":      catalog.Featured,
+			"categories":    catalog.Categories,
+			"skills":        trimSkillHubSkills(catalog.Skills, installState, installedDirs),
 		})
 	}
+}
+
+func skillHubStateFilePath(workdir string) string {
+	return filepath.Join(workdir, ".skillhub", "install-state.json")
+}
+
+func ensureSkillHubStatePath(workdir string) error {
+	if err := ensureExistingPathChainSafe(workdir, true); err != nil {
+		return err
+	}
+	realWorkdir, err := resolveExistingRealPath(workdir)
+	if err != nil {
+		return fmt.Errorf("resolve workspace path: %w", err)
+	}
+	for _, path := range []struct {
+		value      string
+		finalIsDir bool
+	}{
+		{value: filepath.Join(workdir, ".skillhub"), finalIsDir: true},
+		{value: skillHubStateFilePath(workdir), finalIsDir: false},
+	} {
+		if err := ensureExistingPathChainSafe(path.value, path.finalIsDir); err != nil {
+			return err
+		}
+		if info, err := os.Lstat(path.value); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to use symlinked SkillHub state path %s", path.value)
+		}
+		realPath, err := resolveExistingRealPath(path.value)
+		if err != nil {
+			return fmt.Errorf("resolve SkillHub state path: %w", err)
+		}
+		if !pathWithinBase(realWorkdir, realPath) {
+			return fmt.Errorf("SkillHub state path escapes workspace")
+		}
+	}
+	return nil
+}
+
+func readSkillHubInstallState(workdir string) (map[string]skillHubInstallRecord, error) {
+	state := make(map[string]skillHubInstallRecord)
+	if workdir == "" {
+		return state, nil
+	}
+	if err := ensureSkillHubStatePath(workdir); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(skillHubStateFilePath(workdir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return state, nil
+		}
+		return nil, fmt.Errorf("read SkillHub install state: %w", err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return state, nil
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parse SkillHub install state: %w", err)
+	}
+	return state, nil
+}
+
+func writeSkillHubInstallState(workdir string, state map[string]skillHubInstallRecord) error {
+	if err := ensureSkillHubStatePath(workdir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".skillhub"), 0o755); err != nil {
+		return fmt.Errorf("create SkillHub state dir: %w", err)
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal SkillHub install state: %w", err)
+	}
+	if err := os.WriteFile(skillHubStateFilePath(workdir), append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write SkillHub install state: %w", err)
+	}
+	return nil
+}
+
+func recordSkillHubInstallState(workdir, slug, state, message string) error {
+	records, err := readSkillHubInstallState(workdir)
+	if err != nil {
+		return err
+	}
+	if state == "installed" {
+		message = ""
+	}
+	records[slug] = skillHubInstallRecord{
+		State:     state,
+		Message:   strings.TrimSpace(message),
+		UpdatedAt: time.Now().UnixMilli(),
+	}
+	return writeSkillHubInstallState(workdir, records)
+}
+
+func listInstalledSkillDirs(workdir string) (map[string]struct{}, error) {
+	installed := make(map[string]struct{})
+	if workdir == "" {
+		return installed, nil
+	}
+	if err := ensureClawHubStatePath(workdir); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(workdir, "skills"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return installed, nil
+		}
+		return nil, fmt.Errorf("read workspace skills dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			installed[entry.Name()] = struct{}{}
+		}
+	}
+	return installed, nil
 }
 
 // GetSkillHubStatus reports whether the official SkillHub CLI is available locally.
@@ -358,8 +515,9 @@ func InstallSkillHubCLI(cfg *config.Config) gin.HandlerFunc {
 // InstallSkillHubSkill runs the official `skillhub install <slug>` command inside the selected workspace.
 func InstallSkillHubSkill(cfg *config.Config) gin.HandlerFunc {
 	type reqBody struct {
-		SkillID string `json:"skillId"`
-		AgentID string `json:"agentId"`
+		SkillID       string `json:"skillId"`
+		AgentID       string `json:"agentId"`
+		InstallTarget string `json:"installTarget,omitempty"`
 	}
 	return func(c *gin.Context) {
 		var req reqBody
@@ -377,13 +535,29 @@ func InstallSkillHubSkill(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		workdir := resolveSkillsWorkspace(cfg, agentID)
-		if workdir == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "workspace not configured"})
+		workdir, installTarget, err := resolveSkillInstallBase(cfg, agentID, req.InstallTarget)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		if err := ensureClawHubStatePath(workdir); err != nil {
+		skillDir := filepath.Join(workdir, "skills", slug)
+		if err := ensureClawHubInstallTarget(workdir, skillDir); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if info, err := os.Stat(skillDir); err == nil {
+			if info.IsDir() {
+				resp := gin.H{"ok": false, "error": fmt.Sprintf("skill %s is already installed", slug), "installState": "installed", "installTarget": installTarget}
+				if stateErr := recordSkillHubInstallState(workdir, slug, "installed", ""); stateErr != nil {
+					resp["warning"] = stateErr.Error()
+				}
+				c.JSON(http.StatusConflict, resp)
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("install target exists and is not a directory: %s", skillDir)})
+			return
+		} else if !os.IsNotExist(err) {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("check install target: %v", err)})
 			return
 		}
 		if err := os.MkdirAll(filepath.Join(workdir, "skills"), 0o755); err != nil {
@@ -399,12 +573,21 @@ func InstallSkillHubSkill(cfg *config.Config) gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), skillHubInstallTimeout)
 		defer cancel()
 
-		output, err := runCommandCapture(ctx, workdir, binPath, "install", slug)
+		output, err := runCommandCaptureWithEnv(ctx, workdir, skillHubInstallCommandEnv(), binPath, "install", slug)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": wrapSkillHubCommandError("skillhub install", err, output).Error(), "output": output})
+			wrappedErr := wrapSkillHubCommandError("skillhub install", err, output)
+			resp := gin.H{"ok": false, "error": wrappedErr.Error(), "output": output, "installState": "failed"}
+			if stateErr := recordSkillHubInstallState(workdir, slug, "failed", wrappedErr.Error()); stateErr != nil {
+				resp["warning"] = stateErr.Error()
+			}
+			c.JSON(http.StatusBadGateway, resp)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "agentId": agentID, "skillId": slug, "output": output})
+		resp := gin.H{"ok": true, "agentId": agentID, "installTarget": installTarget, "skillId": slug, "output": output, "installState": "installed"}
+		if stateErr := recordSkillHubInstallState(workdir, slug, "installed", ""); stateErr != nil {
+			resp["warning"] = stateErr.Error()
+		}
+		c.JSON(http.StatusOK, resp)
 	}
 }
 
@@ -588,11 +771,22 @@ func extractSkillHubInstallKit(rootDir, archivePath string) (string, error) {
 }
 
 func runCommandCapture(ctx context.Context, dir, name string, args ...string) (string, error) {
+	return runCommandCaptureWithEnv(ctx, dir, nil, name, args...)
+}
+
+func runCommandCaptureWithEnv(ctx context.Context, dir string, extraEnv []string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), extraEnv...)
 	output, err := cmd.CombinedOutput()
 	return trimSkillHubCommandOutput(output), err
+}
+
+func skillHubInstallCommandEnv() []string {
+	return []string{
+		"PYTHONHTTPSVERIFY=0",
+		"SSL_NO_VERIFY=1",
+	}
 }
 
 func trimSkillHubCommandOutput(output []byte) string {

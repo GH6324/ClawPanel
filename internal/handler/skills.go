@@ -626,6 +626,29 @@ func resolveSkillsWorkspace(cfg *config.Config, agentID string) string {
 	return filepath.Join(filepath.Dir(cfg.OpenClawDir), "work")
 }
 
+func normalizeSkillInstallTarget(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "global") {
+		return "global"
+	}
+	return "agent"
+}
+
+func resolveSkillInstallBase(cfg *config.Config, agentID, installTarget string) (string, string, error) {
+	normalized := normalizeSkillInstallTarget(installTarget)
+	if normalized == "global" {
+		base := filepath.Clean(strings.TrimSpace(cfg.OpenClawDir))
+		if base == "" || base == "." {
+			return "", normalized, fmt.Errorf("openclaw dir not configured")
+		}
+		return base, normalized, nil
+	}
+	workspace := resolveSkillsWorkspace(cfg, agentID)
+	if workspace == "" {
+		return "", normalized, fmt.Errorf("workspace not configured")
+	}
+	return workspace, normalized, nil
+}
+
 func resolveRequestedAgentID(cfg *config.Config, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	if requested == "" {

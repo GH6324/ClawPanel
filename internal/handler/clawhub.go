@@ -101,7 +101,7 @@ type clawHubSkillResponse struct {
 	} `json:"latestVersion"`
 }
 
-// SearchClawHub searches the official ClawHub API and annotates installed status for the selected workspace.
+// SearchClawHub searches the official ClawHub API and annotates installed status for the selected install target.
 func SearchClawHub(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		query := strings.TrimSpace(c.Query("q"))
@@ -126,7 +126,11 @@ func SearchClawHub(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 
-		workdir := resolveSkillsWorkspace(cfg, agentID)
+		workdir, installTarget, err := resolveSkillInstallBase(cfg, agentID, c.Query("installTarget"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
 		if err := ensureClawHubStatePath(workdir); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
@@ -150,13 +154,14 @@ func SearchClawHub(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"ok":           true,
-			"agentId":      agentID,
-			"registryBase": registry.PublicBase,
-			"skills":       items,
-			"page":         page,
-			"limit":        limit,
-			"total":        total,
+			"ok":            true,
+			"agentId":       agentID,
+			"installTarget": installTarget,
+			"registryBase":  registry.PublicBase,
+			"skills":        items,
+			"page":          page,
+			"limit":         limit,
+			"total":         total,
 		})
 	}
 }
@@ -164,8 +169,9 @@ func SearchClawHub(cfg *config.Config) gin.HandlerFunc {
 // UninstallSkill removes a skill from the workspace skills directory and cleans up lock file entries.
 func UninstallSkill(cfg *config.Config) gin.HandlerFunc {
 	type reqBody struct {
-		SkillID string `json:"skillId"`
-		AgentID string `json:"agentId"`
+		SkillID       string `json:"skillId"`
+		AgentID       string `json:"agentId"`
+		InstallTarget string `json:"installTarget,omitempty"`
 	}
 	return func(c *gin.Context) {
 		var req reqBody
@@ -183,9 +189,9 @@ func UninstallSkill(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		workdir := resolveSkillsWorkspace(cfg, agentID)
-		if workdir == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "workspace not configured"})
+		workdir, installTarget, err := resolveSkillInstallBase(cfg, agentID, req.InstallTarget)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		skillDir := filepath.Join(workdir, "skills", slug)
@@ -203,7 +209,7 @@ func UninstallSkill(cfg *config.Config) gin.HandlerFunc {
 
 		info, statErr := os.Lstat(skillDir)
 		if statErr != nil || !info.IsDir() {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": fmt.Sprintf("skill %s is not installed in workspace", slug)})
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": fmt.Sprintf("skill %s is not installed in target", slug)})
 			return
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -230,9 +236,10 @@ func UninstallSkill(cfg *config.Config) gin.HandlerFunc {
 		removeClawHubLockEntry(workdir, slug)
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"agentId": agentID,
-			"skillId": slug,
+			"ok":            true,
+			"agentId":       agentID,
+			"installTarget": installTarget,
+			"skillId":       slug,
 		})
 	}
 }
@@ -245,8 +252,8 @@ func CheckSkillDeps(_ *config.Config) gin.HandlerFunc {
 		AnyBins []string `json:"anyBins"`
 	}
 	type depResult struct {
-		Name    string `json:"name"`
-		Found   bool   `json:"found"`
+		Name  string `json:"name"`
+		Found bool   `json:"found"`
 	}
 	return func(c *gin.Context) {
 		var req reqBody
@@ -269,16 +276,24 @@ func CheckSkillDeps(_ *config.Config) gin.HandlerFunc {
 		for _, b := range req.AnyBins {
 			_, err := exec.LookPath(b)
 			found := err == nil
-			if found { anyBinOK = true }
+			if found {
+				anyBinOK = true
+			}
 			anyBinResults = append(anyBinResults, depResult{Name: b, Found: found})
 		}
 		allOK := anyBinOK
 		for _, r := range envResults {
-			if !r.Found { allOK = false; break }
+			if !r.Found {
+				allOK = false
+				break
+			}
 		}
 		if allOK {
 			for _, r := range binResults {
-				if !r.Found { allOK = false; break }
+				if !r.Found {
+					allOK = false
+					break
+				}
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -294,9 +309,10 @@ func CheckSkillDeps(_ *config.Config) gin.HandlerFunc {
 // InstallClawHubSkill installs a public ClawHub skill into the selected agent workspace.
 func InstallClawHubSkill(cfg *config.Config) gin.HandlerFunc {
 	type reqBody struct {
-		SkillID string `json:"skillId"`
-		AgentID string `json:"agentId"`
-		Version string `json:"version,omitempty"`
+		SkillID       string `json:"skillId"`
+		AgentID       string `json:"agentId"`
+		InstallTarget string `json:"installTarget,omitempty"`
+		Version       string `json:"version,omitempty"`
 	}
 	return func(c *gin.Context) {
 		var req reqBody
@@ -314,9 +330,9 @@ func InstallClawHubSkill(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		workdir := resolveSkillsWorkspace(cfg, agentID)
-		if workdir == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "workspace not configured"})
+		workdir, installTarget, err := resolveSkillInstallBase(cfg, agentID, req.InstallTarget)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		registry, err := resolveClawHubRegistryConfig()
@@ -376,11 +392,12 @@ func InstallClawHubSkill(cfg *config.Config) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"agentId": agentID,
-			"skillId": slug,
-			"version": version,
-			"path":    skillDir,
+			"ok":            true,
+			"agentId":       agentID,
+			"installTarget": installTarget,
+			"skillId":       slug,
+			"version":       version,
+			"path":          skillDir,
 		})
 	}
 }
