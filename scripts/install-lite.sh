@@ -245,7 +245,6 @@ RestartSec=5
 Environment=CLAWPANEL_EDITION=lite
 Environment=CLAWPANEL_DATA=${INSTALL_DIR}/data
 Environment=NODE_OPTIONS=--max-old-space-size=2048
-Environment=NODE_OPTIONS=--max-old-space-size=2048
 
 [Install]
 WantedBy=multi-user.target
