@@ -195,7 +195,12 @@ prepare_openclaw_runtime() {
     mv "$openclaw_stage/openclaw/node_modules/openclaw" "$tmp_extract"
     mkdir -p "$tmp_extract/node_modules"
     while IFS= read -r dep; do
-      mv "$dep" "$tmp_extract/node_modules/"
+      dep_name=$(basename "$dep")
+      if [[ -d "$tmp_extract/node_modules/$dep_name" ]]; then
+        cp -a "$dep"/. "$tmp_extract/node_modules/$dep_name/"
+      else
+        mv "$dep" "$tmp_extract/node_modules/"
+      fi
     done < <(find "$openclaw_stage/openclaw/node_modules" -mindepth 1 -maxdepth 1)
     rm -rf "$openclaw_stage/openclaw"
     mv "$tmp_extract" "$openclaw_stage/openclaw"
