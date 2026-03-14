@@ -175,6 +175,7 @@ export default function Skills() {
   const [skillHubCliStatus, setSkillHubCliStatus] = useState<SkillHubStatus | null>(null);
   const [skillHubCliLoading, setSkillHubCliLoading] = useState(false);
   const [skillHubCliInstalling, setSkillHubCliInstalling] = useState(false);
+  const [storeEverLoaded, setStoreEverLoaded] = useState(false);
   const skillHubPageSize = 30;
 
   const debouncedHubSearch = useCallback(() => {
@@ -185,6 +186,13 @@ export default function Skills() {
   useEffect(() => { loadAgents(); }, []);
   useEffect(() => { loadSkills(); }, [selectedAgent]);
   useEffect(() => { if (tab === 'clawhub') loadClawHub(); }, [tab, selectedAgent, storeInstallTarget]);
+  // Eagerly preload store counts in background so badge shows real number before user clicks the tab
+  useEffect(() => {
+    if (!storeEverLoaded && !hubLoading && !skillHubLoading) {
+      loadClawHub();
+      loadSkillHub();
+    }
+  }, [selectedAgent]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { return () => { if (debounceRef.current) clearTimeout(debounceRef.current); }; }, []);
 
   const loadAgents = async () => {
@@ -240,6 +248,7 @@ export default function Skills() {
         setClawHubSkills(r.skills || []);
         setClawHubRegistryBase(normalizeClawHubRegistryBase(r.registryBase));
         if (typeof r.total === 'number') setHubTotal(r.total);
+        setStoreEverLoaded(true);
         (r.skills || []).forEach((s: any) => {
           if (s.requires && !s.installed) checkDeps(s);
         });
@@ -254,7 +263,7 @@ export default function Skills() {
     setSkillHubError('');
     try {
       const r = await api.getSkillHubCatalog(selectedAgent, storeInstallTarget);
-      if (r.ok) setSkillHubCatalog(r as SkillHubCatalog);
+      if (r.ok) { setSkillHubCatalog(r as SkillHubCatalog); setStoreEverLoaded(true); }
       else setSkillHubError(r.error || t.skills.skillHubLoadError);
     } catch (err) {
       console.error('Failed to load SkillHub:', err);
@@ -818,7 +827,7 @@ export default function Skills() {
         </button>
         <button onClick={() => setTab('clawhub')}
           className={`${modern ? 'px-3.5 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 border' : 'pb-3 text-sm font-medium border-b-2 transition-all flex items-center gap-2'} ${tab === 'clawhub' ? (modern ? 'border-blue-100/80 bg-blue-50/85 dark:bg-blue-900/20 dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm' : 'border-violet-600 text-violet-700 dark:text-violet-400') : (modern ? 'border-transparent text-gray-500 hover:bg-white/70 dark:hover:bg-slate-800/70 hover:text-gray-700 dark:hover:text-gray-300' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300')}`}>
-          <Globe size={16} />{t.skills.storeTab} <span className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-xs px-1.5 py-0.5 rounded-full">{storeBadgeCount}</span>
+          <Globe size={16} />{t.skills.storeTab} <span className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-xs px-1.5 py-0.5 rounded-full">{storeEverLoaded ? storeBadgeCount : (hubLoading || skillHubLoading ? <Loader2 size={12} className="inline animate-spin" /> : '\u00b7\u00b7\u00b7')}</span>
         </button>
       </div>
 
@@ -1088,9 +1097,29 @@ export default function Skills() {
           )}
 
           {hubLoading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-3">
-              <Loader2 size={32} className="animate-spin text-violet-500/50" />
-              <p className="text-sm">{t.skills.loadingClawHub}</p>
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-gray-400 text-sm"><Loader2 size={16} className="animate-spin text-violet-500/50" />{t.skills.loadingClawHub}</div>
+              <div className={storeGridClasses}>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div key={i} className={`${modern ? 'rounded-[24px] p-4 border border-white/65 dark:border-slate-700/50 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,246,255,0.62))] dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.88),rgba(30,64,175,0.10))] backdrop-blur-xl' : 'bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700/50'} animate-pulse`}>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-2/3 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div className="h-3 w-1/3 rounded bg-gray-100 dark:bg-gray-800" />
+                      </div>
+                    </div>
+                    <div className="space-y-2 mb-4">
+                      <div className="h-3 w-full rounded bg-gray-100 dark:bg-gray-800" />
+                      <div className="h-3 w-4/5 rounded bg-gray-100 dark:bg-gray-800" />
+                    </div>
+                    <div className="flex gap-2 mt-auto">
+                      <div className="h-8 w-10 rounded-lg bg-gray-100 dark:bg-gray-800" />
+                      <div className="h-8 flex-1 rounded-lg bg-gray-100 dark:bg-gray-800" />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <div className={storeGridClasses}>
@@ -1289,9 +1318,29 @@ export default function Skills() {
 
           {/* Skill cards */}
           {skillHubLoading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-3">
-              <Loader2 size={32} className="animate-spin text-blue-500/50" />
-              <p className="text-sm">{t.skills.skillHubLoading || '\u52a0\u8f7d SkillHub \u76ee\u5f55...'}</p>
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-gray-400 text-sm"><Loader2 size={16} className="animate-spin text-blue-500/50" />{t.skills.skillHubLoading || '\u52a0\u8f7d SkillHub \u76ee\u5f55...'}</div>
+              <div className={storeGridClasses}>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div key={i} className={`${modern ? 'rounded-[24px] p-4 border border-white/65 dark:border-slate-700/50 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,246,255,0.62))] dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.88),rgba(30,64,175,0.10))] backdrop-blur-xl' : 'bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700/50'} animate-pulse`}>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-2/3 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div className="h-3 w-1/3 rounded bg-gray-100 dark:bg-gray-800" />
+                      </div>
+                    </div>
+                    <div className="space-y-2 mb-4">
+                      <div className="h-3 w-full rounded bg-gray-100 dark:bg-gray-800" />
+                      <div className="h-3 w-4/5 rounded bg-gray-100 dark:bg-gray-800" />
+                    </div>
+                    <div className="flex gap-2 mt-auto">
+                      <div className="h-8 w-10 rounded-lg bg-gray-100 dark:bg-gray-800" />
+                      <div className="h-8 flex-1 rounded-lg bg-gray-100 dark:bg-gray-800" />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : !skillHubCatalog ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-xl">
