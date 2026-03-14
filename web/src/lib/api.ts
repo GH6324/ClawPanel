@@ -144,15 +144,32 @@ const _api = {
   getBackups: () => get('/system/backups'),
   restoreBackup: (backupName: string) => post('/system/restore', { backupName }),
   getSkills: (agentId?: string) => get('/system/skills' + (agentId ? `?agentId=${encodeURIComponent(agentId)}` : '')),
+  getSkillConfig: (skillId: string, agentId?: string) => get(`/system/skills/${encodeURIComponent(skillId)}/config` + (agentId ? `?agentId=${encodeURIComponent(agentId)}` : '')),
+  updateSkillConfig: (skillId: string, values: Record<string, any>, agentId?: string) => put(`/system/skills/${encodeURIComponent(skillId)}/config`, { agentId, values }),
   syncClawHub: () => post('/system/clawhub-sync'),
-  searchClawHub: (query?: string, agentId?: string) => {
+  searchClawHub: (query?: string, agentId?: string, page?: number, limit?: number, installTarget?: 'agent' | 'global') => {
     const params = new URLSearchParams();
     if (query) params.set('q', query);
     if (agentId) params.set('agentId', agentId);
+    if (page && page > 1) params.set('page', String(page));
+    if (limit) params.set('limit', String(limit));
+    if (installTarget) params.set('installTarget', installTarget);
     const suffix = params.toString();
     return get('/system/clawhub/search' + (suffix ? `?${suffix}` : ''));
   },
-  installClawHubSkill: (skillId: string, agentId?: string) => post('/system/clawhub/install', { skillId, agentId }),
+  installClawHubSkill: (skillId: string, agentId?: string, installTarget?: 'agent' | 'global') => post('/system/clawhub/install', { skillId, agentId, installTarget }),
+  uninstallSkill: (skillId: string, agentId?: string, installTarget?: 'agent' | 'global') => post('/system/clawhub/uninstall', { skillId, agentId, installTarget }),
+  checkSkillDeps: (env?: string[], bins?: string[], anyBins?: string[]) => post('/system/clawhub/check-deps', { env, bins, anyBins }),
+  getSkillHubCatalog: (agentId?: string, installTarget?: 'agent' | 'global') => {
+    const params = new URLSearchParams();
+    if (agentId) params.set('agentId', agentId);
+    if (installTarget) params.set('installTarget', installTarget);
+    const suffix = params.toString();
+    return get('/system/skillhub/catalog' + (suffix ? `?${suffix}` : ''));
+  },
+  getSkillHubStatus: () => get('/system/skillhub/status'),
+  installSkillHubCLI: () => postLong('/system/skillhub/install-cli', undefined, 300000),
+  installSkillHubSkill: (skillId: string, agentId?: string, installTarget?: 'agent' | 'global') => postLong('/system/skillhub/install', { skillId, agentId, installTarget }, 300000),
   getCronJobs: () => get('/system/cron'),
   updateCronJobs: (jobs: any[]) => put('/system/cron', { jobs }),
   getDocs: () => get('/system/docs'),

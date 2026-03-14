@@ -14,9 +14,9 @@ const FAKE_LOGS = [
 ];
 
 const FAKE_SKILLS = [
-  { id: 'web-search', skillKey: 'web-search', name: 'Web Search', description: '联网搜索能力，支持Google/Bing/DuckDuckGo', enabled: true, source: 'app-skill', version: '1.2.0', requires: { env: ['SEARCH_API_KEY'], bins: [] } },
+  { id: 'web-search', skillKey: 'web-search', name: 'Web Search', description: '联网搜索能力，支持Google/Bing/DuckDuckGo', enabled: true, source: 'app-skill', version: '1.2.0', requires: { env: ['SEARCH_API_KEY'], bins: [], config: ['tools.web.search.provider', 'tools.web.search.maxResults'] } },
   { id: 'image-gen', skillKey: 'image-gen', name: 'Image Generation', description: 'AI图像生成，支持DALL-E/Stable Diffusion', enabled: true, source: 'app-skill', version: '1.0.3', requires: { env: ['OPENAI_API_KEY'], bins: [] } },
-  { id: 'code-runner', skillKey: 'code-runner', name: 'Code Runner', description: '安全沙箱代码执行，支持Python/JS/Shell', enabled: true, source: 'managed', version: '0.9.1', requires: { env: [], bins: ['python3', 'node'] } },
+  { id: 'code-runner', skillKey: 'code-runner', name: 'Code Runner', description: '安全沙箱代码执行，支持Python/JS/Shell', enabled: true, source: 'managed', version: '0.9.1', requires: { env: [], bins: ['python3', 'node'], config: ['tools.exec.timeoutSec', 'tools.exec.ask'] } },
   { id: 'weather', skillKey: 'weather', name: 'Weather', description: '天气查询插件，支持全球城市', enabled: true, source: 'managed', version: '1.1.0' },
   { id: 'translator', skillKey: 'translator', name: 'Translator', description: '多语言翻译，支持100+语言', enabled: false, source: 'managed', version: '0.8.0' },
   { id: 'reminder', skillKey: 'reminder', name: 'Reminder', description: '定时提醒功能', enabled: true, source: 'workspace', version: '0.5.0' },
@@ -28,6 +28,8 @@ const FAKE_CLAWHUB_SKILLS = [
   { id: 'jira-helper', name: 'Jira Helper', description: '读取与总结 Jira 工单上下文', version: '0.6.2', installed: false },
   { id: 'feishu-notes', name: 'Feishu Notes', description: '将结果整理并发送到飞书文档', version: '0.4.5', installed: false },
 ];
+
+let mockSkillHubCliInstalled = false;
 
 const FAKE_CRON_JOBS = [
   { id: 'cron_1', name: '每日早报', enabled: true, schedule: { kind: 'cron', expr: '0 8 * * *' }, agentId: 'main', sessionTarget: 'main', wakeMode: 'now', payload: { kind: 'text', text: '请生成今日早报，包含科技、AI、财经要闻', deliver: true, channel: 'qq' }, state: { lastRunAtMs: Date.now() - 86400000, lastStatus: 'ok' }, createdAtMs: Date.now() - 604800000 },
@@ -86,9 +88,34 @@ const FAKE_AGENTS = {
         tone: '直接、聚焦结果',
       },
     },
+    {
+      id: 'translation',
+      default: false,
+      workspace: '/workspaces/translation',
+      agentDir: 'agents/translation',
+      sessions: 2,
+      lastActive: Date.now() - 7200000,
+      tools: { profile: 'minimal', agentToAgent: { enabled: false } },
+      groupChat: { enabled: false },
+      sandbox: { mode: 'none' },
+      identity: { name: 'Translator', theme: 'translation', emoji: '🌐', description: '多语言翻译代理' },
+    },
+    {
+      id: 'reviewer',
+      default: false,
+      workspace: '/workspaces/reviewer',
+      agentDir: 'agents/reviewer',
+      sessions: 1,
+      lastActive: Date.now() - 86400000,
+      tools: { profile: 'read-only', agentToAgent: { enabled: true, allow: ['main'] } },
+      groupChat: { enabled: false },
+      sandbox: { mode: 'all', workspaceAccess: 'ro' },
+      identity: { name: 'Code Reviewer', theme: 'code review', emoji: '🔍', description: '代码审查与质量检测' },
+    },
   ],
   bindings: [
     { type: 'route', agentId: 'work', comment: 'work-group', match: { channel: 'qq', peer: { kind: 'group', id: '123' } } },
+    { type: 'route', agentId: 'translation', comment: 'feishu-translate', enabled: true, match: { channel: 'feishu', accountId: 'default' } },
   ],
 };
 
@@ -154,6 +181,45 @@ const FAKE_CONFIG: any = {
     exec: { timeoutSec: 30, security: 'allowlist', ask: 'on-miss', safeBins: ['ls', 'cat', 'echo', 'grep', 'git'] },
   },
 };
+
+function configPathSegments(path: string): string[] {
+  return path.split('.').map(part => part.trim()).filter(Boolean);
+}
+
+function getNestedConfigValue(root: any, path: string): { ok: boolean; value?: any } {
+  let current = root;
+  for (const segment of configPathSegments(path)) {
+    if (!current || typeof current !== 'object' || !(segment in current)) {
+      return { ok: false };
+    }
+    current = current[segment];
+  }
+  return { ok: true, value: current };
+}
+
+function setNestedConfigValue(root: any, path: string, value: any) {
+  const segments = configPathSegments(path);
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    if (!current[segment] || typeof current[segment] !== 'object') {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  current[segments[segments.length - 1]] = value;
+}
+
+function deleteNestedConfigValue(root: any, path: string) {
+  const segments = configPathSegments(path);
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    if (!current || typeof current !== 'object' || !current[segment] || typeof current[segment] !== 'object') {
+      return;
+    }
+    current = current[segment];
+  }
+  delete current[segments[segments.length - 1]];
+}
 
 const FAKE_FILES: any[] = [
   { name: 'openclaw.json', path: 'openclaw.json', size: 2048, sizeHuman: '2.0 KB', isDirectory: false, modifiedAt: new Date(Date.now() - 3600000).toISOString(), extension: '.json', ageDays: 0 },
@@ -521,22 +587,109 @@ export const mockApi = {
       ],
     };
   },
+  getSkillConfig: async (skillId: string) => {
+    await delay(160);
+    const skill = FAKE_SKILLS.find(item => (item.skillKey || item.id) === skillId || item.id === skillId);
+    const configKeys = Array.isArray(skill?.requires?.config) ? skill!.requires!.config : [];
+    const values: Record<string, any> = {};
+    configKeys.forEach((key: string) => {
+      const result = getNestedConfigValue(FAKE_CONFIG, key);
+      if (result.ok) values[key] = result.value;
+    });
+    return { ok: true, skillId: skill?.id || skillId, skillKey: skill?.skillKey || skillId, configKeys, values };
+  },
+  updateSkillConfig: async (skillId: string, values: Record<string, any>) => {
+    await delay(220);
+    const skill = FAKE_SKILLS.find(item => (item.skillKey || item.id) === skillId || item.id === skillId);
+    const configKeys = Array.isArray(skill?.requires?.config) ? skill!.requires!.config : [];
+    const allowed = new Set(configKeys);
+    Object.entries(values || {}).forEach(([key, value]) => {
+      if (!allowed.has(key)) return;
+      if (value == null) deleteNestedConfigValue(FAKE_CONFIG, key);
+      else setNestedConfigValue(FAKE_CONFIG, key, value);
+    });
+    const snapshot: Record<string, any> = {};
+    configKeys.forEach((key: string) => {
+      const result = getNestedConfigValue(FAKE_CONFIG, key);
+      if (result.ok) snapshot[key] = result.value;
+    });
+    return { ok: true, skillId: skill?.id || skillId, skillKey: skill?.skillKey || skillId, configKeys, values: snapshot };
+  },
   syncClawHub: async () => { await delay(800); return { ok: true, skills: [] }; },
-  searchClawHub: async (query?: string, _agentId?: string) => {
+  searchClawHub: async (query?: string, _agentId?: string, page?: number, limit?: number, _installTarget?: 'agent' | 'global') => {
     await delay(500);
     const q = (query || '').toLowerCase();
-    const skills = q
+    const all = q
       ? FAKE_CLAWHUB_SKILLS.filter(skill =>
           skill.id.toLowerCase().includes(q) ||
           skill.name.toLowerCase().includes(q) ||
           skill.description.toLowerCase().includes(q),
         )
       : FAKE_CLAWHUB_SKILLS;
-    return { ok: true, registryBase: 'https://clawhub.ai', skills: JSON.parse(JSON.stringify(skills)) };
+    const p = page || 1;
+    const l = limit || 30;
+    const start = (p - 1) * l;
+    const skills = all.slice(start, start + l);
+    return { ok: true, registryBase: 'https://clawhub.ai', skills: JSON.parse(JSON.stringify(skills)), page: p, limit: l, total: all.length };
   },
-  installClawHubSkill: async (skillId: string, _agentId?: string) => {
+  installClawHubSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
     await delay(800);
-    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, version: '1.0.0' };
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent', version: '1.0.0' };
+  },
+  uninstallSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
+    await delay(600);
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent' };
+  },
+  checkSkillDeps: async (env?: string[], bins?: string[], anyBins?: string[]) => {
+    await delay(300);
+    const envR = (env || []).map(e => ({ name: e, found: Math.random() > 0.3 }));
+    const binR = (bins || []).map(b => ({ name: b, found: Math.random() > 0.3 }));
+    const anyR = (anyBins || []).map(b => ({ name: b, found: Math.random() > 0.5 }));
+    const allMet = envR.every(r => r.found) && binR.every(r => r.found) && (anyR.length === 0 || anyR.some(r => r.found));
+    return { ok: true, allMet, env: envR, bins: binR, anyBins: anyR };
+  },
+  getSkillHubCatalog: async (_agentId?: string, _installTarget?: 'agent' | 'global') => {
+    await delay(600);
+    return {
+      ok: true, total: 12911,
+      generatedAt: '2026-03-01T13:44:23Z',
+      featured: ['github', 'openai-whisper', 'skill-vetter', 'sequential-thinking', 'browser', 'google-maps', 'firecrawl', 'fetch', 'puppeteer', 'slack'],
+      categories: {
+        'AI \u667a\u80fd': ['ai', 'llm', 'gpt', 'openai', 'claude', 'machine-learning'],
+        '\u5f00\u53d1\u5de5\u5177': ['developer', 'code', 'git', 'github', 'devops'],
+        '\u6548\u7387\u63d0\u5347': ['productivity', 'automation', 'workflow'],
+        '\u6570\u636e\u5206\u6790': ['data', 'analytics', 'visualization'],
+        '\u5185\u5bb9\u521b\u4f5c': ['content', 'writing', 'blog', 'seo'],
+        '\u5b89\u5168\u5408\u89c4': ['security', 'audit', 'compliance'],
+        '\u901a\u8baf\u534f\u4f5c': ['communication', 'slack', 'discord'],
+      },
+      skills: [
+        { slug: 'github', name: 'Github', description: 'GitHub integration for repository management', description_zh: 'GitHub \u96c6\u6210\u5de5\u5177\uff0c\u652f\u6301\u4ed3\u5e93\u7ba1\u7406\u3001PR\u3001Issue', version: '1.0.1', homepage: 'https://clawhub.ai/skills/github', tags: ['developer', 'git'], downloads: 59000, stars: 198, score: 128858.2, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'openai-whisper', name: 'OpenAI Whisper', description: 'Speech-to-text using OpenAI Whisper', description_zh: 'OpenAI Whisper \u8bed\u97f3\u8f6c\u6587\u5b57', version: '2.1.0', homepage: 'https://clawhub.ai/skills/openai-whisper', tags: ['ai', 'llm'], downloads: 32000, stars: 156, score: 98234.5, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'sequential-thinking', name: 'Sequential Thinking', description: 'Step-by-step reasoning tool', description_zh: '\u987a\u5e8f\u601d\u7ef4\u63a8\u7406\u5de5\u5177', version: '1.3.2', homepage: 'https://clawhub.ai/skills/sequential-thinking', tags: ['ai', 'productivity'], downloads: 45000, stars: 210, score: 115000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'browser', name: 'Browser', description: 'Web browsing and scraping tool', description_zh: '\u7f51\u9875\u6d4f\u89c8\u4e0e\u6293\u53d6\u5de5\u5177', version: '1.5.0', homepage: 'https://clawhub.ai/skills/browser', tags: ['developer', 'automation'], downloads: 28000, stars: 120, score: 82000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'google-maps', name: 'Google Maps', description: 'Google Maps integration', description_zh: '\u8c37\u6b4c\u5730\u56fe\u96c6\u6210', version: '1.0.0', homepage: 'https://clawhub.ai/skills/google-maps', tags: ['data', 'visualization'], downloads: 12000, stars: 65, score: 35000, owner: 'clawhub', updated_at: 1772065840450 },
+        { slug: 'skill-vetter', name: 'Skill Vetter', description: 'Skill quality assessment tool', description_zh: '\u6280\u80fd\u8d28\u91cf\u8bc4\u4f30\u5de5\u5177', version: '0.9.0', homepage: 'https://clawhub.ai/skills/skill-vetter', tags: ['security', 'audit'], downloads: 8000, stars: 42, score: 22000, owner: 'clawhub', updated_at: 1772065840450 },
+      ],
+    };
+  },
+  getSkillHubStatus: async () => {
+    await delay(150);
+    return mockSkillHubCliInstalled
+      ? { ok: true, installed: true, binPath: '/Users/demo/.local/bin/skillhub', installGuideURL: 'https://skillhub.tencent.com/', skillInstallCommand: 'skillhub install <slug>' }
+      : { ok: true, installed: false, installGuideURL: 'https://skillhub.tencent.com/', skillInstallCommand: 'skillhub install <slug>', error: 'SkillHub CLI not found; install SkillHub CLI first' };
+  },
+  installSkillHubCLI: async () => {
+    await delay(1400);
+    mockSkillHubCliInstalled = true;
+    return { ok: true, installed: true, binPath: '/Users/demo/.local/bin/skillhub', output: 'installed cli' };
+  },
+  installSkillHubSkill: async (skillId: string, _agentId?: string, _installTarget?: 'agent' | 'global') => {
+    await delay(1000);
+    if (!mockSkillHubCliInstalled) {
+      return { ok: false, error: 'SkillHub CLI not found; install SkillHub CLI first', needsCLI: true };
+    }
+    return { ok: true, skillId, agentId: _agentId || FAKE_AGENTS.default, installTarget: _installTarget || 'agent', output: `installed ${skillId}` };
   },
   getCronJobs: async () => { await delay(200); return { ok: true, jobs: FAKE_CRON_JOBS }; },
   updateCronJobs: async () => { await delay(300); return { ok: true }; },
