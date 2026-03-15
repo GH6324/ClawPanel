@@ -242,6 +242,18 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
           detail: wechatStatus?.loggedIn ? (wechatStatus.name || t.common.connected) : t.common.notLoggedIn,
           connected: !!wechatStatus?.loggedIn,
         });
+      } else if (ch.id === 'wecom') {
+        channels.push({
+          label: locale === 'zh-CN' ? '企业微信（机器人）' : 'WeCom Bot',
+          detail: t.common.enabled,
+          connected: true,
+        });
+      } else if (ch.id === 'wecom-app') {
+        channels.push({
+          label: locale === 'zh-CN' ? '企业微信（自建应用）' : 'WeCom App',
+          detail: t.common.enabled,
+          connected: true,
+        });
       } else {
         channels.push({ label: ch.label, detail: t.common.enabled, connected: true });
       }

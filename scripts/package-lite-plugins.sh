@@ -76,6 +76,36 @@ with open(manifest_path, 'w', encoding='utf-8') as f:
 PY
 }
 
+# 把 @sunnoy/wecom 的 plugin id 改为 wecom-app，channel 路由标识保持 wecom
+rewrite_wecom_app_manifest() {
+  python3 - <<'PY' "$OUT_DIR/wecom-app/openclaw.plugin.json" "$OUT_DIR/wecom-app/index.js" "$OUT_DIR/wecom-app/wecom/channel-plugin.js"
+import json, sys, re
+
+manifest_path, index_path, channel_plugin_path = sys.argv[1:4]
+
+# 1. openclaw.plugin.json: id -> wecom-app, channels 保持 wecom
+with open(manifest_path, 'r', encoding='utf-8') as f:
+    manifest = json.load(f)
+manifest['id'] = 'wecom-app'
+manifest['channels'] = ['wecom']  # channel 路由标识不变
+with open(manifest_path, 'w', encoding='utf-8') as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+
+# 2. index.js: 只改顶层 plugin id 那一行
+with open(index_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+content = re.sub(r'^  id: "wecom",', '  id: "wecom-app",', content, count=1, flags=re.MULTILINE)
+with open(index_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+
+# 3. channel-plugin.js: channel 的 id/meta.id 保持 wecom，不改动
+# （channel: "wecom" 消息路由标识全部保持，不替换）
+
+print("wecom-app manifest rewritten: plugin id=wecom-app, channel id=wecom")
+PY
+}
+
 if [[ -z "$GLOBAL_NODE_ROOT" ]]; then
   for candidate in \
     "/usr/lib/node_modules" \
@@ -93,7 +123,8 @@ echo "==> 安装 Lite 预置插件候选 npm 包"
 npm install --omit=dev --registry=https://registry.npmmirror.com --prefix "$TMP_NPM_DIR" \
   clawdbot-dingtalk@0.4.6 \
   @sliverp/qqbot@1.5.3 \
-  @wecom/wecom-openclaw-plugin@1.0.6 >/dev/null
+  @wecom/wecom-openclaw-plugin@1.0.6 \
+  @sunnoy/wecom@1.5.0 >/dev/null
 
 if [[ "$TARGET_OS" == "linux" ]]; then
   copy_dir "qq" \
@@ -101,14 +132,17 @@ if [[ "$TARGET_OS" == "linux" ]]; then
     "$OPENCLAW_CONFIG_ROOT/extensions/qq"
 fi
 copy_npm_pkg "@sliverp/qqbot@1.5.3" "@sliverp/qqbot" "qqbot"
+# 企业微信智能机器人（内置官方插件）
 copy_npm_pkg "@wecom/wecom-openclaw-plugin@1.0.6" "@wecom/wecom-openclaw-plugin" "wecom"
 if [[ -f "$OUT_DIR/wecom/openclaw.plugin.json" ]]; then
   rewrite_wecom_manifest
 fi
+# 企业微信自建应用（@sunnoy/wecom，plugin id 改写为 wecom-app 避免冲突）
+copy_npm_pkg "@sunnoy/wecom@1.5.0" "@sunnoy/wecom" "wecom-app"
+if [[ -f "$OUT_DIR/wecom-app/openclaw.plugin.json" ]]; then
+  rewrite_wecom_app_manifest
+fi
 if [[ "$TARGET_OS" == "linux" ]]; then
-  copy_dir "wecom-app" \
-    "$GLOBAL_NODE_ROOT/@openclaw-china/wecom-app" \
-    "$OPENCLAW_CONFIG_ROOT/extensions/wecom-app"
   copy_dir "dingtalk" \
     "$OPENCLAW_CONFIG_ROOT/extensions/dingtalk" \
     "$PLUGIN_REPO_ROOT/dingtalk" \
