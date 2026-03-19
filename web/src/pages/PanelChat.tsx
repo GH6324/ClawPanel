@@ -645,7 +645,7 @@ export default function PanelChat() {
           </div>
 
           <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08),transparent_24%),linear-gradient(180deg,rgba(255,255,255,0.16),transparent_36%)] px-5 py-5 dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.14),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_36%)]">
-            {messages.length === 0 ? (
+            {timelineMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-slate-400">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full border border-blue-100 bg-white/80 text-blue-500 shadow-sm dark:border-blue-500/20 dark:bg-slate-900/70 dark:text-blue-200">
                   <Bot size={28} />

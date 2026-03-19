@@ -141,7 +141,7 @@ func buildPanelChatTitle(input string) string {
 }
 
 func panelChatSessionFile(cfg *config.Config, agentID, openclawSessionID string) string {
-	return resolveAgentPath(cfg, agentID, "sessions", openclawSessionID+".jsonl")
+	return filepath.Join(resolveAgentSessionsDir(cfg, agentID), openclawSessionID+".jsonl")
 }
 
 func sanitizePanelChatContent(content string) string {
@@ -273,61 +273,14 @@ func readPanelChatMessages(cfg *config.Config, session panelChatSession) ([]map[
 	return messages, nil
 }
 
-func resolvePanelChatCommand(cfg *config.Config) (string, []string, error) {
-	for _, bin := range candidateOpenClawBins(cfg) {
-		bin = strings.TrimSpace(bin)
-		if bin == "" {
-			continue
-		}
-		if filepath.IsAbs(bin) {
-			if _, err := os.Stat(bin); err == nil {
-				return bin, nil, nil
-			}
-			continue
-		}
-		if resolved, err := exec.LookPath(bin); err == nil {
-			return resolved, nil, nil
-		}
-	}
-
-	if app := strings.TrimSpace(cfg.OpenClawApp); app != "" {
-		entry := filepath.Join(app, "openclaw.mjs")
-		if _, err := os.Stat(entry); err == nil {
-			nodeCandidates := []string{
-				filepath.Join(filepath.Dir(app), "node", "bin", "node"),
-				"node",
-			}
-			for _, candidate := range nodeCandidates {
-				candidate = strings.TrimSpace(candidate)
-				if candidate == "" {
-					continue
-				}
-				if filepath.IsAbs(candidate) {
-					if _, err := os.Stat(candidate); err == nil {
-						return candidate, []string{entry}, nil
-					}
-					continue
-				}
-				if resolved, err := exec.LookPath(candidate); err == nil {
-					return resolved, []string{entry}, nil
-				}
-			}
-		}
-	}
-
-	return "", nil, fmt.Errorf("未找到可用的 openclaw 命令")
-}
-
 func newPanelChatExecCommand(ctx context.Context, cfg *config.Config, session panelChatSession, message string) (*exec.Cmd, error) {
-	bin, prefixArgs, err := resolvePanelChatCommand(cfg)
+	baseCmd, err := cfg.OpenClawCommand("agent", "--session-id", session.OpenClawSessionID, "--message", message, "--json")
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{}, prefixArgs...)
-	args = append(args, "agent", "--session-id", session.OpenClawSessionID, "--message", message, "--json")
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(ctx, baseCmd.Path, baseCmd.Args[1:]...)
 	setPanelChatProcessGroup(cmd)
-	cmd.Dir = cfg.OpenClawDir
+	cmd.Dir = baseCmd.Dir
 	cmd.Env = append(config.BuildExecEnv(),
 		fmt.Sprintf("OPENCLAW_DIR=%s", cfg.OpenClawDir),
 		fmt.Sprintf("OPENCLAW_STATE_DIR=%s", cfg.OpenClawDir),
