@@ -1,7 +1,9 @@
-VERSION := 5.2.13
+PRO_VERSION ?= 5.2.15
+LITE_VERSION ?= 0.1.15
 BINARY := clawpanel
 EDITION ?= pro
 APP_NAME ?= $(BINARY)
+VERSION ?= $(if $(filter lite,$(EDITION)),$(LITE_VERSION),$(PRO_VERSION))
 MODULE := github.com/zhaoxinyi02/ClawPanel
 LDFLAGS := -s -w -X github.com/zhaoxinyi02/ClawPanel/internal/buildinfo.Version=$(VERSION) -X github.com/zhaoxinyi02/ClawPanel/internal/buildinfo.Edition=$(EDITION)
 GOFLAGS := -trimpath
