@@ -286,13 +286,13 @@ func runServer(stopCh chan struct{}) {
 
 			// AI 助手
 			auth.POST("/system/ai-chat", handler.AIChat(cfg))
-			auth.GET("/panel-chat/sessions", handler.ListPanelChatSessions(cfg))
-			auth.POST("/panel-chat/sessions", handler.CreatePanelChatSession(cfg))
-			auth.GET("/panel-chat/sessions/:id", handler.GetPanelChatSessionDetail(cfg))
+			auth.GET("/panel-chat/sessions", handler.ListPanelChatSessions(db, cfg))
+			auth.POST("/panel-chat/sessions", handler.CreatePanelChatSession(db, cfg))
+			auth.GET("/panel-chat/sessions/:id", handler.GetPanelChatSessionDetail(db, cfg))
 			auth.PUT("/panel-chat/sessions/:id", handler.RenamePanelChatSession(cfg))
-			auth.POST("/panel-chat/sessions/:id/messages", handler.SendPanelChatMessage(cfg))
+			auth.POST("/panel-chat/sessions/:id/messages", handler.SendPanelChatMessage(db, cfg))
 			auth.POST("/panel-chat/sessions/:id/cancel", handler.CancelPanelChatMessage(cfg))
-			auth.DELETE("/panel-chat/sessions/:id", handler.DeletePanelChatSession(cfg))
+			auth.DELETE("/panel-chat/sessions/:id", handler.DeletePanelChatSession(db, cfg))
 			auth.GET("/workflows/settings", workflowRuntime.GetSettings())
 			auth.PUT("/workflows/settings", workflowRuntime.SaveSettings())
 			auth.GET("/workflows/templates", workflowRuntime.ListTemplates())
