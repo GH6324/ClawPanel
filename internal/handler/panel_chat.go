@@ -94,17 +94,6 @@ func panelChatMessagesPath(cfg *config.Config, sessionID string) string {
 	return filepath.Join(cfg.DataDir, "panel-chat", "messages", sessionID+".json")
 }
 
-func cleanupLegacyPanelChatData(cfg *config.Config) {
-	legacyPaths := []string{
-		filepath.Join(cfg.DataDir, "group-chat"),
-		filepath.Join(cfg.DataDir, "panel-chat", "groups"),
-		filepath.Join(cfg.DataDir, "panel-chat", "tasks"),
-	}
-	for _, path := range legacyPaths {
-		_ = os.RemoveAll(path)
-	}
-}
-
 func loadPanelChatMessages(cfg *config.Config, sessionID string) ([]map[string]interface{}, error) {
 	path := panelChatMessagesPath(cfg, sessionID)
 	data, err := os.ReadFile(path)
@@ -137,7 +126,6 @@ func savePanelChatMessages(cfg *config.Config, sessionID string, messages []map[
 }
 
 func loadPanelChatSessions(cfg *config.Config) ([]panelChatSession, error) {
-	cleanupLegacyPanelChatData(cfg)
 	path := panelChatSessionsPath(cfg)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -171,7 +159,6 @@ func loadPanelChatSessions(cfg *config.Config) ([]panelChatSession, error) {
 }
 
 func savePanelChatSessions(cfg *config.Config, sessions []panelChatSession) error {
-	cleanupLegacyPanelChatData(cfg)
 	path := panelChatSessionsPath(cfg)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -235,11 +222,8 @@ func ensurePanelChatRuntime(cfg *config.Config, session panelChatSession) (state
 	if err = os.MkdirAll(stateDir, 0o755); err != nil {
 		return "", "", "", err
 	}
-	if err = os.MkdirAll(filepath.Join(workDir, "openclaw-work"), 0o755); err != nil {
-		return "", "", "", err
-	}
 	sourceConfigPath := filepath.Join(cfg.OpenClawDir, "openclaw.json")
-	if err = copyFileIfMissing(sourceConfigPath, configPath); err != nil {
+	if err = copyFile(sourceConfigPath, configPath); err != nil {
 		return "", "", "", err
 	}
 	srcAgentDir := filepath.Join(cfg.OpenClawDir, "agents", session.AgentID)
@@ -249,21 +233,13 @@ func ensurePanelChatRuntime(cfg *config.Config, session panelChatSession) (state
 		return "", "", "", err
 	}
 	_ = os.MkdirAll(filepath.Join(dstAgentDir, "sessions"), 0o755)
-	srcWorkspace := filepath.Join(cfg.OpenClawWork, session.AgentID)
-	dstWorkspace := filepath.Join(workDir, "openclaw-work", scopedAgentID)
-	if err = copyDirIfMissing(srcWorkspace, dstWorkspace); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", "", "", err
-	}
 	if err = rewritePanelChatRuntimeConfig(sourceConfigPath, configPath, session); err != nil {
 		return "", "", "", err
 	}
 	return stateDir, configPath, workDir, nil
 }
 
-func copyFileIfMissing(src, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		return nil
-	}
+func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
@@ -272,37 +248,6 @@ func copyFileIfMissing(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o644)
-}
-
-func copyDirIfMissing(src, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		return nil
-	}
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return os.ErrNotExist
-	}
-	return filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
-	})
 }
 
 func copyDirWithoutSessions(src, dst string) error {
@@ -362,7 +307,13 @@ func rewritePanelChatRuntimeConfig(srcConfigPath, dstConfigPath string, session 
 		}
 		scopedID := panelChatScopedAgentID(session.ID, session.AgentID)
 		cloned["id"] = scopedID
-		cloned["workspace"] = filepath.ToSlash(filepath.Join("openclaw-work", scopedID))
+		if workspace := strings.TrimSpace(toString(agent["workspace"])); workspace != "" {
+			if loc, err := resolveAgentCoreWorkspaceFromPath(&config.Config{OpenClawDir: filepath.Dir(srcConfigPath), OpenClawWork: ""}, workspace, false); err == nil && strings.TrimSpace(loc.Safe) != "" {
+				cloned["workspace"] = filepath.ToSlash(loc.Safe)
+			} else {
+				cloned["workspace"] = workspace
+			}
+		}
 		cloned["default"] = true
 		newList = append(newList, cloned)
 		break
@@ -447,6 +398,22 @@ func normalizePanelChatParticipantInput(agentIDs []string, primaryAgentID, summa
 		}
 	}
 	return items
+}
+
+func clonePanelChatParticipants(items []panelChatParticipantView) []model.PanelChatParticipant {
+	cloned := make([]model.PanelChatParticipant, 0, len(items))
+	for _, item := range items {
+		cloned = append(cloned, model.PanelChatParticipant{
+			AgentID:           item.AgentID,
+			RoleType:          item.RoleType,
+			OrderIndex:        item.OrderIndex,
+			AutoReply:         item.AutoReply,
+			IsSummary:         item.IsSummary,
+			Enabled:           item.Enabled,
+			OpenClawSessionID: item.OpenClawSessionID,
+		})
+	}
+	return cloned
 }
 
 func loadPanelChatParticipants(db *sql.DB, cfg *config.Config, session panelChatSession) ([]panelChatParticipantView, error) {
@@ -714,7 +681,9 @@ func newPanelChatExecCommand(ctx context.Context, cfg *config.Config, session pa
 		fmt.Sprintf("OPENCLAW_STATE_DIR=%s", sessionStateDir),
 		fmt.Sprintf("OPENCLAW_CONFIG_PATH=%s", sessionConfigPath),
 	)
-	if sessionWorkDir != "" {
+	if cfg.OpenClawWork != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("OPENCLAW_WORK_DIR=%s", cfg.OpenClawWork))
+	} else if sessionWorkDir != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("OPENCLAW_WORK_DIR=%s", sessionWorkDir))
 	}
 	if cfg.OpenClawApp != "" {
@@ -1117,11 +1086,12 @@ func CreatePanelChatSession(db *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		}
 		sessions = append(sessions, session)
 		sortPanelChatSessions(sessions)
-		if err := savePanelChatSessions(cfg, sessions); err != nil {
+		if err := model.ReplacePanelChatParticipants(db, session.ID, participants); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		if err := model.ReplacePanelChatParticipants(db, session.ID, participants); err != nil {
+		if err := savePanelChatSessions(cfg, sessions); err != nil {
+			_ = model.DeletePanelChatParticipants(db, session.ID)
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
@@ -1316,12 +1286,25 @@ func DeletePanelChatSession(db *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "会话不存在"})
 			return
 		}
-		sessions = append(sessions[:idx], sessions[idx+1:]...)
-		if err := savePanelChatSessions(cfg, sessions); err != nil {
+		currentParticipants, err := loadPanelChatParticipants(db, cfg, *session)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		_ = model.DeletePanelChatParticipants(db, session.ID)
+		participantBackup := clonePanelChatParticipants(currentParticipants)
+		sessions = append(sessions[:idx], sessions[idx+1:]...)
+		if err := model.DeletePanelChatParticipants(db, session.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if err := savePanelChatSessions(cfg, sessions); err != nil {
+			if len(participantBackup) == 0 {
+				participantBackup = normalizePanelChatParticipantInput([]string{session.AgentID}, session.AgentID, session.SummaryAgentID)
+			}
+			_ = model.ReplacePanelChatParticipants(db, session.ID, participantBackup)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
 		_ = os.Remove(panelChatMessagesPath(cfg, session.ID))
 		_ = os.Remove(panelChatSessionFile(cfg, session.AgentID, session.OpenClawSessionID))
 		_ = os.RemoveAll(panelChatRuntimeRoot(cfg, session.ID))
