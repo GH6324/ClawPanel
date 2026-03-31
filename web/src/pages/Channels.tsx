@@ -401,11 +401,14 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'clientId', label: 'Client ID', type: 'text', help: '钉钉应用 Client ID' },
       { key: 'clientSecret', label: 'Client Secret', type: 'password', help: '钉钉应用 Client Secret' },
     ] },
-  { id: 'wecom', label: '企业微信（智能机器人）', description: '企业微信智能机器人，使用回调 Token / EncodingAESKey / Webhook Path 配置', type: 'plugin',
+  { id: 'wecom', label: '企业微信（智能机器人）', description: '企业微信智能机器人，支持 URL 回调与长连接两种接入方式', type: 'plugin',
     configFields: [
+      { key: 'connectionMode', label: '连接方式', type: 'select', options: ['callback', 'long-polling'], help: 'callback = URL 回调；long-polling = 长连接', defaultValue: 'callback' },
       { key: 'token', label: 'Token', type: 'password', help: '企业微信回调配置中的 Token' },
       { key: 'encodingAESKey', label: 'EncodingAESKey', type: 'password', help: '43 位字符' },
       { key: 'webhookPath', label: 'Webhook Path', type: 'text', help: '如 /wecom' },
+      { key: 'botId', label: 'Bot ID', type: 'text', help: '长连接模式下使用的 Bot ID' },
+      { key: 'secret', label: 'Secret', type: 'password', help: '长连接模式下使用的 Secret' },
     ] },
   { id: 'wecom-app', label: '企业微信（自建应用）', description: '企业微信自建应用，支持更完整 API 与微信入口', type: 'plugin',
     configFields: [
@@ -466,12 +469,21 @@ const CHANNEL_REQUIRED_FIELDS: Record<string, string[]> = {
 const FEISHU_OFFICIAL_IDS = ['openclaw-lark', 'feishu-openclaw-plugin'] as const;
 // 所有飞书插件 ID（含社区版）
 const FEISHU_ALL_IDS = ['openclaw-lark', 'feishu-openclaw-plugin', 'feishu'] as const;
+const WECOM_BOT_PLUGIN_IDS = ['wecom-openclaw-plugin', 'wecom'] as const;
 
 function getEnabledPluginEntry(entries: Record<string, any>, ids: readonly string[]): string | null {
   for (const id of ids) {
     if (entries[id]?.enabled) return id;
   }
   return null;
+}
+
+function getWecomConnectionMode(cfg: any): 'callback' | 'long-polling' {
+	const mode = String(cfg?.connectionMode || '').trim().toLowerCase();
+	if (mode === 'long-polling' || mode === 'long_polling' || mode === 'longpolling') return 'long-polling';
+	if (mode === 'callback') return 'callback';
+	if (String(cfg?.botId || '').trim() && String(cfg?.secret || '').trim()) return 'long-polling';
+	return 'callback';
 }
 
 // 飞书版本：读取当前启用的变体
@@ -528,7 +540,8 @@ function isWecomAppEnabled(ocConfig: any): boolean {
 }
 
 function isWecomBuiltinEnabled(ocConfig: any): boolean {
-  const wecomEnabled = !!ocConfig?.channels?.wecom?.enabled || !!ocConfig?.plugins?.entries?.wecom?.enabled;
+  const entries = ocConfig?.plugins?.entries || {};
+  const wecomEnabled = !!ocConfig?.channels?.wecom?.enabled || !!getEnabledPluginEntry(entries, WECOM_BOT_PLUGIN_IDS);
   return wecomEnabled && !isWecomAppEnabled(ocConfig);
 }
 // Determine channel status: 'enabled' (green), 'configured' (red/orange), 'unconfigured' (gray)
@@ -550,7 +563,7 @@ function getChannelStatus(
           ch.id === 'feishu'
             ? installedPlugins.some((p: any) => (FEISHU_ALL_IDS as readonly string[]).includes(p.id))
             : ch.id === 'wecom'
-              ? installedPlugins.some((p: any) => p.id === 'wecom' || p.id === 'wecom-openclaw-plugin')
+              ? installedPlugins.some((p: any) => (WECOM_BOT_PLUGIN_IDS as readonly string[]).includes(p.id))
               : ch.id === 'wecom-app'
                 ? installedPlugins.some((p: any) => p.id === 'wecom' || p.id === 'wecom-app')
                 : installedPlugins.some((p: any) => p.id === ch.id)
@@ -794,7 +807,7 @@ export default function Channels() {
       return installedPlugins.some((p: any) => (FEISHU_ALL_IDS as readonly string[]).includes(p.id));
     }
     if (channelId === 'wecom') {
-      return installedPlugins.some((p: any) => p.id === 'wecom' || p.id === 'wecom-openclaw-plugin');
+      return installedPlugins.some((p: any) => (WECOM_BOT_PLUGIN_IDS as readonly string[]).includes(p.id));
     }
     // 企业微信自建应用：@sunnoy/wecom 插件 id 为 wecom
     if (channelId === 'wecom-app') {
@@ -805,6 +818,27 @@ export default function Channels() {
   };
 
   const validateChannelBeforeEnable = (channelId: string) => {
+    if (channelId === 'wecom') {
+      const cfg = getEffectiveChannelConfig(channelId);
+      const mode = getWecomConnectionMode(cfg);
+      const required = mode === 'long-polling'
+        ? [
+            ['botId', 'Bot ID'],
+            ['secret', 'Secret'],
+          ]
+        : [
+            ['token', 'Token'],
+            ['encodingAESKey', 'EncodingAESKey'],
+            ['webhookPath', 'Webhook Path'],
+          ];
+      const missing = required
+        .filter(([key]) => !String(getNestedValue(cfg, key) ?? '').trim())
+        .map(([, label]) => label);
+      if (missing.length) {
+        return `企业微信（智能机器人）当前连接方式缺少必填项：${missing.join('、')}`;
+      }
+      return '';
+    }
     const requiredFields = CHANNEL_REQUIRED_FIELDS[channelId] || [];
     if (!requiredFields.length) return '';
     const cfg = getEffectiveChannelConfig(channelId);
@@ -924,6 +958,7 @@ export default function Channels() {
       if (cfg.encodingAESKey === undefined && cfg.encodingAesKey !== undefined) {
         cfg.encodingAESKey = cfg.encodingAesKey;
       }
+      cfg.connectionMode = getWecomConnectionMode(cfg);
       return cfg;
     }
     if (isPlainObject(ocChannels[channelId])) return ocChannels[channelId];
@@ -977,6 +1012,15 @@ export default function Channels() {
   const currentConfiguredFeishuDmScope = String(feishuDmDiagnosis?.configuredDmScope || '').trim();
   const currentEffectiveFeishuDmScope = String(feishuDmDiagnosis?.effectiveDmScope || 'main').trim() || 'main';
   const feishuAuthorizedSenders = Array.isArray(feishuDmDiagnosis?.authorizedSenders) ? feishuDmDiagnosis.authorizedSenders : [];
+  const currentWecomConfig = getEffectiveChannelConfig('wecom');
+  const currentWecomMode = getWecomConnectionMode(currentWecomConfig);
+  const currentWecomEntryId = getEnabledPluginEntry(ocPlugins, WECOM_BOT_PLUGIN_IDS) || (ocPlugins['wecom-openclaw-plugin'] ? 'wecom-openclaw-plugin' : (ocPlugins['wecom'] ? 'wecom' : 'wecom-openclaw-plugin'));
+
+  const handleWecomModeChange = (mode: 'callback' | 'long-polling') => {
+    updateChannelDraft('wecom', draft => {
+      draft.connectionMode = mode;
+    });
+  };
 
   const handleToggleFeishuAdvancedAccounts = (enabled: boolean) => {
     setFeishuAdvancedAccounts(enabled);
@@ -1211,7 +1255,7 @@ export default function Channels() {
       const mutexId = WECOM_MUTEX[channelId];
       if (newEnabled && mutexId && isChannelEnabled(mutexId)) {
         await api.toggleChannel(mutexId, false);
-        await api.updatePlugin('wecom', { enabled: false });
+        await api.updatePlugin(currentWecomEntryId, { enabled: false });
       }
       const r = await api.toggleChannel(channelId, newEnabled);
       if (r.ok) {
@@ -1245,15 +1289,17 @@ export default function Channels() {
       const mutexId = WECOM_MUTEX[currentDef.id];
       if (enabledState && mutexId && isChannelEnabled(mutexId)) {
         await api.toggleChannel(mutexId, false);
-        await api.updatePlugin('wecom', { enabled: false });
+        await api.updatePlugin(currentWecomEntryId, { enabled: false });
       }
       // 飞书特殊处理：保存时操作当前活跃变体的 plugin entry
       if (currentDef.id === 'feishu') {
         const entryId = getFeishuPluginEntryId(ocConfig);
         await api.updatePlugin(entryId, { enabled: enabledState });
+      } else if (currentDef.id === 'wecom') {
+        await api.updatePlugin(currentWecomEntryId, { enabled: enabledState });
       } else if (currentDef.id === 'wecom-app') {
         // wecom-app 复用 wecom 插件，操作 wecom entry 而非创建无效的 wecom-app entry
-        await api.updatePlugin('wecom', { enabled: enabledState });
+        await api.updatePlugin(currentWecomEntryId, { enabled: enabledState });
       } else if (currentDef.type === 'plugin') {
         await api.updatePlugin(currentDef.id, { enabled: enabledState });
       }
@@ -2583,9 +2629,72 @@ export default function Channels() {
                 </div>
               )}
 
+              {currentDef.id === 'wecom' && (
+                <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">连接方式</h4>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                        企业微信智能机器人支持两种接入方式：
+                        <span className="font-medium"> 使用 URL 回调 </span>
+                        与
+                        <span className="font-medium"> 使用长连接 </span>。
+                        现在可在同一页面切换，已填写的另一种方式配置会继续保留。
+                      </p>
+                      <a
+                        href="https://open.work.weixin.qq.com/help2/pc/cat?doc_id=21661"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-flex text-xs text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+                      >
+                        查看企业微信官方配置指引
+                      </a>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 xl:w-[620px]">
+                      <button
+                        type="button"
+                        onClick={() => handleWecomModeChange('long-polling')}
+                        className={`rounded-xl border p-4 text-left transition ${currentWecomMode === 'long-polling' ? 'border-sky-500 bg-sky-50/80 dark:bg-sky-950/20 shadow-sm' : 'border-gray-200 dark:border-gray-700 hover:border-sky-300 dark:hover:border-sky-700 bg-white dark:bg-gray-900'}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-gray-900 dark:text-white">使用长连接</div>
+                            <div className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">无需公网域名或固定回调 URL，配置 Bot ID 和 Secret 即可建立长连接。</div>
+                          </div>
+                          <div className={`mt-1 h-4 w-4 rounded-full border ${currentWecomMode === 'long-polling' ? 'border-sky-500 bg-sky-500' : 'border-gray-300 dark:border-gray-600'}`}>
+                            <div className={`m-[3px] h-2 w-2 rounded-full bg-white ${currentWecomMode === 'long-polling' ? 'opacity-100' : 'opacity-0'}`} />
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleWecomModeChange('callback')}
+                        className={`rounded-xl border p-4 text-left transition ${currentWecomMode === 'callback' ? 'border-sky-500 bg-sky-50/80 dark:bg-sky-950/20 shadow-sm' : 'border-gray-200 dark:border-gray-700 hover:border-sky-300 dark:hover:border-sky-700 bg-white dark:bg-gray-900'}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-gray-900 dark:text-white">使用 URL 回调</div>
+                            <div className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">通过回调 URL 接收消息并返回结果，适合已有域名、反向代理或公网入口的部署方式。</div>
+                          </div>
+                          <div className={`mt-1 h-4 w-4 rounded-full border ${currentWecomMode === 'callback' ? 'border-sky-500 bg-sky-500' : 'border-gray-300 dark:border-gray-600'}`}>
+                            <div className={`m-[3px] h-2 w-2 rounded-full bg-white ${currentWecomMode === 'callback' ? 'opacity-100' : 'opacity-0'}`} />
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-sky-100 dark:border-sky-900/40 bg-sky-50/70 dark:bg-sky-950/10 px-4 py-3 text-xs text-sky-700 dark:text-sky-300 leading-relaxed">
+                    {currentWecomMode === 'long-polling'
+                      ? <>当前为 <span className="font-semibold">长连接</span> 模式。保存时会写入 <span className="font-mono">botId</span> 和 <span className="font-mono">secret</span>，并优先按免配对模式处理。</>
+                      : <>当前为 <span className="font-semibold">URL 回调</span> 模式。保存时会写入 <span className="font-mono">token</span>、<span className="font-mono">encodingAESKey</span> 和 <span className="font-mono">webhookPath</span>。</>}
+                  </div>
+                </div>
+              )}
+
               <form
                 id="channel-config-form"
-                className={currentDef.id === 'feishu' ? 'space-y-4' : 'grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5'}
+                className={currentDef.id === 'feishu' || currentDef.id === 'wecom' ? 'space-y-4' : 'grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5'}
                 onSubmit={e => { e.preventDefault(); handleSave(); }}
               >
                 {currentDef.id === 'feishu'
@@ -2612,6 +2721,27 @@ export default function Channels() {
                         </div>
                       );
                     })
+                  : currentDef.id === 'wecom'
+                    ? (
+                      <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">API 配置</h4>
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                            {currentWecomMode === 'long-polling'
+                              ? '使用 SDK 启动长连接，配置 Bot ID 和 Secret 即可连接企业微信智能机器人。'
+                              : '使用企业微信回调地址接收消息并返回结果，需要填写 Token、EncodingAESKey 与 Webhook Path。'}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-4">
+                          {currentDef.configFields
+                            .filter(field => field.key !== 'connectionMode')
+                            .filter(field => currentWecomMode === 'long-polling'
+                              ? ['botId', 'secret'].includes(field.key)
+                              : ['token', 'encodingAESKey', 'webhookPath'].includes(field.key))
+                            .map(field => renderConfigField(currentDef.id, field))}
+                        </div>
+                      </div>
+                    )
                   : currentDef.configFields.map(field => renderConfigField(currentDef.id, field))}
               </form>
 

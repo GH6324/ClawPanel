@@ -24,6 +24,9 @@ var feishuOfficialPluginIDs = []string{"openclaw-lark", "feishu-openclaw-plugin"
 // 所有飞书插件 ID（官方版 + 社区版）
 var feishuAllPluginIDs = []string{"openclaw-lark", "feishu-openclaw-plugin", "feishu"}
 
+// 企业微信机器人插件 ID（优先级从高到低：新 ID 优先）
+var wecomBotPluginIDs = []string{"wecom-openclaw-plugin", "wecom"}
+
 func normalizeProviderAPI(api string) string {
 	switch api {
 	case "anthropic":
@@ -335,12 +338,23 @@ func GetChannels(cfg *config.Config) gin.HandlerFunc {
 }
 
 func pluginInstalled(cfg *config.Config, pluginID string) bool {
-	for _, candidate := range []string{
-		filepath.Join(cfg.OpenClawDir, "extensions", pluginID),
-		filepath.Join(filepath.Dir(cfg.OpenClawDir), "extensions", pluginID),
-	} {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return true
+	return pluginInstalledAny(cfg, pluginID)
+
+}
+
+func pluginInstalledAny(cfg *config.Config, pluginIDs ...string) bool {
+	for _, pluginID := range pluginIDs {
+		pluginID = strings.TrimSpace(pluginID)
+		if pluginID == "" {
+			continue
+		}
+		for _, candidate := range []string{
+			filepath.Join(cfg.OpenClawDir, "extensions", pluginID),
+			filepath.Join(filepath.Dir(cfg.OpenClawDir), "extensions", pluginID),
+		} {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return true
+			}
 		}
 	}
 	return false
@@ -354,6 +368,19 @@ func qqbotPluginInstalled(cfg *config.Config) bool {
 	return pluginInstalled(cfg, "qqbot")
 }
 
+func wecomBotPluginInstalled(cfg *config.Config) bool {
+	return pluginInstalledAny(cfg, wecomBotPluginIDs...)
+}
+
+func resolveWecomBotEntryID(entries map[string]interface{}) string {
+	for _, id := range wecomBotPluginIDs {
+		if entries[id] != nil {
+			return id
+		}
+	}
+	return wecomBotPluginIDs[0]
+}
+
 // SaveChannel 保存通道配置
 func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -365,6 +392,11 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 
 		if id == "qqbot" && !qqbotPluginInstalled(cfg) {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "QQBot plugin is not installed; install QQBot before configuring the channel"})
+			return
+		}
+
+		if id == "wecom" && !wecomBotPluginInstalled(cfg) {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "WeCom plugin is not installed; install WeCom before configuring the channel"})
 			return
 		}
 		var body map[string]interface{}
@@ -879,6 +911,31 @@ func normalizeWeComChannelConfig(body map[string]interface{}) map[string]interfa
 	if body == nil {
 		return map[string]interface{}{}
 	}
+	mode := strings.TrimSpace(strings.ToLower(toString(body["connectionMode"])))
+	switch mode {
+	case "long_polling", "longpolling":
+		mode = "long-polling"
+	case "callback", "long-polling":
+	default:
+		if strings.TrimSpace(toString(body["botId"])) != "" && strings.TrimSpace(toString(body["secret"])) != "" {
+			mode = "long-polling"
+		} else {
+			mode = "callback"
+		}
+	}
+	body["connectionMode"] = mode
+	for _, key := range []string{"token", "encodingAESKey", "encodingAesKey", "webhookPath"} {
+		if trimmed := strings.TrimSpace(toString(body[key])); trimmed != "" {
+			if key == "encodingAesKey" {
+				body["encodingAESKey"] = trimmed
+				delete(body, "encodingAesKey")
+				continue
+			}
+			body[key] = trimmed
+		} else {
+			delete(body, key)
+		}
+	}
 	for _, key := range []string{"botId", "secret", "websocketUrl", "name"} {
 		if trimmed := strings.TrimSpace(toString(body[key])); trimmed != "" {
 			body[key] = trimmed
@@ -1104,7 +1161,17 @@ func SavePlugin(cfg *config.Config) gin.HandlerFunc {
 		if entries == nil {
 			entries = map[string]interface{}{}
 		}
-		entries[id] = body
+		if id == "wecom" {
+			entryID := resolveWecomBotEntryID(entries)
+			entries[entryID] = body
+			for _, aliasID := range wecomBotPluginIDs {
+				if aliasID != entryID {
+					delete(entries, aliasID)
+				}
+			}
+		} else {
+			entries[id] = body
+		}
 		plugins["entries"] = entries
 		ocConfig["plugins"] = plugins
 
@@ -1138,6 +1205,11 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 			return
 		}
 
+		if req.ChannelID == "wecom" && !wecomBotPluginInstalled(cfg) {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "WeCom plugin is not installed; install WeCom before enabling the channel"})
+			return
+		}
+
 		ocConfig, _ := cfg.ReadOpenClawJSON()
 		if ocConfig == nil {
 			ocConfig = map[string]interface{}{}
@@ -1168,10 +1240,11 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 					other["enabled"] = false
 					channels[mutexID] = other
 				}
-				// 关闭另一个 plugin entry（两个都映射到 wecom entry）
-				if pe, ok2 := entries["wecom"].(map[string]interface{}); ok2 {
+				// 关闭另一个 plugin entry（企业微信机器人使用当前实际插件 ID）
+				entryID := resolveWecomBotEntryID(entries)
+				if pe, ok2 := entries[entryID].(map[string]interface{}); ok2 {
 					pe["enabled"] = false
-					entries["wecom"] = pe
+					entries[entryID] = pe
 				}
 				// 关闭 channels.wecom 的 enabled（另一个方向时）
 				if mutexID == "wecom" {
@@ -1192,14 +1265,20 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 			wecom["enabled"] = req.Enabled
 			channels["wecom"] = wecom
 			delete(channels, "wecom-app")
-			// plugin entry 也用 wecom
-			pe, _ := entries["wecom"].(map[string]interface{})
+			// plugin entry 使用当前实际的 wecom 机器人插件 ID
+			entryID := resolveWecomBotEntryID(entries)
+			pe, _ := entries[entryID].(map[string]interface{})
 			if pe == nil {
 				pe = map[string]interface{}{}
 			}
 			pe["enabled"] = req.Enabled
-			entries["wecom"] = pe
+			entries[entryID] = pe
 			delete(entries, "wecom-app")
+			for _, aliasID := range wecomBotPluginIDs {
+				if aliasID != entryID {
+					delete(entries, aliasID)
+				}
+			}
 		} else {
 			ch, _ := channels[req.ChannelID].(map[string]interface{})
 			if ch == nil {
@@ -1228,6 +1307,20 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 					if otherEntry, ok := entries[othID].(map[string]interface{}); ok {
 						otherEntry["enabled"] = false
 						entries[othID] = otherEntry
+					}
+				}
+			} else if req.ChannelID == "wecom" {
+				entryID := resolveWecomBotEntryID(entries)
+				pe, _ := entries[entryID].(map[string]interface{})
+				if pe == nil {
+					pe = map[string]interface{}{}
+				}
+				pe["enabled"] = req.Enabled
+				entries[entryID] = pe
+				delete(entries, "wecom-app")
+				for _, aliasID := range wecomBotPluginIDs {
+					if aliasID != entryID {
+						delete(entries, aliasID)
 					}
 				}
 			} else {

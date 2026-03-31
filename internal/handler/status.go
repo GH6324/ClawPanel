@@ -67,6 +67,7 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 					channelAliases := map[string]string{
 						"feishu-openclaw-plugin": "feishu",
 						"openclaw-lark":          "feishu",
+						"wecom-openclaw-plugin":  "wecom",
 					}
 					for id, conf := range entries {
 						if id == "wecom-app" {

@@ -624,19 +624,38 @@ func (m *Manager) findInstalledPluginDir(pluginID string) (string, bool) {
 }
 
 func (m *Manager) installViaOpenClawCLI(spec string, logf func(string)) error {
-	var cmd *exec.Cmd
-	var err error
-	if m.cfg != nil && m.cfg.IsLiteEdition() {
-		cmd, err = m.cfg.OpenClawCommand("plugins", "install", spec)
-		if err != nil {
-			return err
+	if err := m.runOpenClawPluginInstall(spec, logf); err == nil {
+		return nil
+	} else if shouldFallbackToPackedTarball(spec, err) {
+		if logf != nil {
+			logf("⚠️ 官方源安装触发限流，尝试先从 npm 打包到本地 tarball 再交给 OpenClaw 安装...")
 		}
+		if packErr := m.installPackedTarballViaOpenClawCLI(spec, logf); packErr == nil {
+			return nil
+		} else if logf != nil {
+			logf(fmt.Sprintf("⚠️ 本地 tarball 安装失败，继续回退 npm 全局安装: %v", packErr))
+		}
+		return err
 	} else {
-		bin := config.DetectOpenClawBinaryPath()
-		if strings.TrimSpace(bin) == "" {
-			return fmt.Errorf("未找到 openclaw 可执行文件")
-		}
-		cmd = exec.Command(bin, "plugins", "install", spec)
+		return err
+	}
+}
+
+func (m *Manager) openClawPluginInstallCommand(target string) (*exec.Cmd, error) {
+	if m.cfg != nil && m.cfg.IsLiteEdition() {
+		return m.cfg.OpenClawCommand("plugins", "install", target)
+	}
+	bin := config.DetectOpenClawBinaryPath()
+	if strings.TrimSpace(bin) == "" {
+		return nil, fmt.Errorf("未找到 openclaw 可执行文件")
+	}
+	return exec.Command(bin, "plugins", "install", target), nil
+}
+
+func (m *Manager) runOpenClawPluginInstall(target string, logf func(string)) error {
+	cmd, err := m.openClawPluginInstallCommand(target)
+	if err != nil {
+		return err
 	}
 	cmd.Env = config.BuildExecEnv()
 	stdout, err := cmd.StdoutPipe()
@@ -660,6 +679,69 @@ func (m *Manager) installViaOpenClawCLI(spec string, logf func(string)) error {
 		return err
 	}
 	return nil
+}
+
+func shouldFallbackToPackedTarball(spec string, err error) bool {
+	if err == nil {
+		return false
+	}
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "rate limit exceeded") && !strings.Contains(lower, "clawhub") {
+		return false
+	}
+	return strings.HasPrefix(spec, "@") || (!strings.Contains(spec, "/") && !strings.HasSuffix(spec, ".tgz") && !strings.HasSuffix(spec, ".tar.gz"))
+}
+
+func (m *Manager) installPackedTarballViaOpenClawCLI(spec string, logf func(string)) error {
+	tmpDir, err := os.MkdirTemp("", "clawpanel-plugin-pack-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	packArgs := []string{"pack", spec, "--silent", "--pack-destination", tmpDir, "--registry=https://registry.npmmirror.com"}
+	packCmd := exec.Command("npm", packArgs...)
+	packCmd.Env = config.BuildExecEnv()
+	packCmd.Dir = tmpDir
+	packOut, packErr := packCmd.CombinedOutput()
+	if packErr != nil {
+		fallbackArgs := []string{"pack", spec, "--silent", "--pack-destination", tmpDir}
+		fallbackCmd := exec.Command("npm", fallbackArgs...)
+		fallbackCmd.Env = config.BuildExecEnv()
+		fallbackCmd.Dir = tmpDir
+		packOut, packErr = fallbackCmd.CombinedOutput()
+		if packErr != nil {
+			return fmt.Errorf("npm pack 失败: %v: %s", packErr, strings.TrimSpace(string(packOut)))
+		}
+	}
+	packedName := strings.TrimSpace(string(packOut))
+	if idx := strings.LastIndex(packedName, "\n"); idx >= 0 {
+		packedName = strings.TrimSpace(packedName[idx+1:])
+	}
+	if packedName == "" {
+		entries, readErr := os.ReadDir(tmpDir)
+		if readErr != nil {
+			return fmt.Errorf("npm pack 未返回输出且无法读取产物: %v", readErr)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".tgz") || strings.HasSuffix(entry.Name(), ".tar.gz")) {
+				packedName = entry.Name()
+				break
+			}
+		}
+	}
+	if packedName == "" {
+		return fmt.Errorf("npm pack 未生成可识别的 tarball")
+	}
+	target := filepath.Join(tmpDir, packedName)
+	if logf != nil {
+		logf("📦 已获取本地插件包: " + filepath.Base(target))
+	}
+	return m.runOpenClawPluginInstall(target, logf)
 }
 
 // InstallLocal installs a plugin from a local directory

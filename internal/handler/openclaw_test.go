@@ -1017,6 +1017,51 @@ func TestNormalizeFeishuChannelConfigToleratesLegacyRequireMentionOpen(t *testin
 	}
 }
 
+func TestNormalizeWeComChannelConfigCallbackMode(t *testing.T) {
+	t.Parallel()
+
+	body := map[string]interface{}{
+		"token":          "  token-123  ",
+		"encodingAesKey": "  abcdef  ",
+		"webhookPath":    " /wecom/callback ",
+	}
+
+	got := normalizeWeComChannelConfig(body)
+	if got["connectionMode"] != "callback" {
+		t.Fatalf("expected callback mode, got %#v", got["connectionMode"])
+	}
+	if got["encodingAESKey"] != "abcdef" {
+		t.Fatalf("expected normalized encodingAESKey, got %#v", got["encodingAESKey"])
+	}
+	if _, exists := got["encodingAesKey"]; exists {
+		t.Fatalf("expected legacy encodingAesKey to be removed, got %#v", got)
+	}
+	if got["webhookPath"] != "/wecom/callback" {
+		t.Fatalf("expected trimmed webhookPath, got %#v", got["webhookPath"])
+	}
+}
+
+func TestNormalizeWeComChannelConfigLongPollingMode(t *testing.T) {
+	t.Parallel()
+
+	body := map[string]interface{}{
+		"connectionMode": "long_polling",
+		"botId":          " bot-001 ",
+		"secret":         " sec-001 ",
+	}
+
+	got := normalizeWeComChannelConfig(body)
+	if got["connectionMode"] != "long-polling" {
+		t.Fatalf("expected long-polling mode, got %#v", got["connectionMode"])
+	}
+	if got["botId"] != "bot-001" || got["secret"] != "sec-001" {
+		t.Fatalf("expected trimmed bot credentials, got %#v", got)
+	}
+	if got["dmPolicy"] != "open" {
+		t.Fatalf("expected long-polling mode to default dmPolicy=open, got %#v", got["dmPolicy"])
+	}
+}
+
 func TestSaveChannelRejectsQQWhenPluginMissing(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
@@ -1048,6 +1093,26 @@ func TestSaveChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
 
 	body := []byte(`{"enabled":true,"appId":"123","clientSecret":"secret"}`)
 	req := httptest.NewRequest(http.MethodPut, "/openclaw/channels/qqbot", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSaveChannelRejectsWeComWhenPluginMissing(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	r := gin.New()
+	r.PUT("/openclaw/channels/:id", SaveChannel(cfg, nil))
+
+	body := []byte(`{"enabled":true,"token":"abc","encodingAESKey":"def","webhookPath":"/wecom"}`)
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/channels/wecom", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -1094,6 +1159,47 @@ func TestToggleChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestToggleChannelRejectsWeComWhenPluginMissing(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	r := gin.New()
+	r.PUT("/openclaw/channels/toggle", ToggleChannel(cfg, nil, nil))
+
+	body := []byte(`{"channelId":"wecom","enabled":true}`)
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/channels/toggle", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestResolveWeComBotEntryID(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries map[string]interface{}
+		want    string
+	}{
+		{"empty entries returns canonical id", map[string]interface{}{}, "wecom-openclaw-plugin"},
+		{"new official entry present", map[string]interface{}{"wecom-openclaw-plugin": map[string]interface{}{}}, "wecom-openclaw-plugin"},
+		{"legacy entry present", map[string]interface{}{"wecom": map[string]interface{}{}}, "wecom"},
+		{"new entry takes precedence", map[string]interface{}{"wecom-openclaw-plugin": map[string]interface{}{}, "wecom": map[string]interface{}{}}, "wecom-openclaw-plugin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveWecomBotEntryID(tt.entries)
+			if got != tt.want {
+				t.Errorf("resolveWecomBotEntryID() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
