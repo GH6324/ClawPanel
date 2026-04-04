@@ -27,6 +27,10 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 	return func(c *gin.Context) {
 		ocConfig, _ := cfg.ReadOpenClawJSON()
 		injectWecomVirtualChannel(cfg, ocConfig)
+		gatewayPort := cfg.DefaultGatewayPort()
+		if p := procMgr.GatewayPortInt(); p > 0 {
+			gatewayPort = p
+		}
 
 		// 提取已启用的通道
 		channelLabels := map[string]string{
@@ -65,9 +69,8 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 				if entries, ok := plugins["entries"].(map[string]interface{}); ok {
 					// 飞书别名映射：官方版插件 ID 映射为 feishu，避免重复
 					channelAliases := map[string]string{
-						"feishu-openclaw-plugin": "feishu",
-						"openclaw-lark":          "feishu",
-						"wecom-openclaw-plugin":  "wecom",
+						canonicalFeishuOfficialPluginID: canonicalFeishuCommunityPluginID,
+						"wecom-openclaw-plugin":         "wecom",
 					}
 					for id, conf := range entries {
 						if id == "wecom-app" {
@@ -194,7 +197,7 @@ func GetStatus(db *sql.DB, cfg *config.Config, procMgr *process.Manager, napcatM
 				"edition":         cfg.Edition,
 				"managedRuntime":  cfg.IsLiteEdition(),
 				"bundledRuntime":  cfg.IsLiteEdition(),
-				"gatewayPort":     cfg.DefaultGatewayPort(),
+				"gatewayPort":     gatewayPort,
 			},
 			"gateway": gin.H{
 				"running": gatewayRunning,
