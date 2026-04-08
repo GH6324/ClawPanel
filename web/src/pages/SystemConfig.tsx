@@ -266,28 +266,6 @@ function formatConfigList(value: any): string {
   return '';
 }
 
-function getExpandStateStorageKey(raw: string): string {
-  return `clawpanel:system-config:expand:${raw.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '-').toLowerCase()}`;
-}
-
-function readPersistedExpandState(storageKey: string, fallback = true): boolean {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (raw == null) return fallback;
-    return raw === '1';
-  } catch {
-    return fallback;
-  }
-}
-
-function writePersistedExpandState(storageKey: string, next: boolean) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(storageKey, next ? '1' : '0');
-  } catch {}
-}
-
 const TOOL_GOVERNANCE_PRESETS: Record<ToolProfilePreset, { label: string; help: string }> = {
   minimal: {
     label: 'Minimal',
@@ -367,7 +345,6 @@ export default function SystemConfig() {
   const [diffItems, setDiffItems] = useState<ConfigDiffItem[]>([]);
   const [showDiffPreview, setShowDiffPreview] = useState(false);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
-  const [showAgentDefaultsModal, setShowAgentDefaultsModal] = useState(false);
 
   useEffect(() => { loadConfig(); }, []);
   useEffect(() => {
@@ -520,58 +497,6 @@ export default function SystemConfig() {
   };
   const currentWebSearchProvider = String(getVal('tools.web.search.provider') || '').trim();
   const webSearchProviderMeta = WEB_SEARCH_PROVIDER_CONFIG[currentWebSearchProvider] || null;
-  const agentDefaultsFields: CfgField[] = [
-    {
-      path: 'agents.defaults.contextTokens',
-      label: '默认上下文 Token 预算',
-      type: 'number',
-      placeholder: '200000',
-      help: 'OpenClaw 会再与模型真实 contextWindow 取更小值；留空表示不在面板里显式覆盖。',
-      integer: true,
-      min: 1,
-    },
-    { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number', placeholder: '4', integer: true, min: 1 },
-    {
-      path: 'agents.defaults.skipBootstrap',
-      label: '跳过 Bootstrap 文件',
-      type: 'toggle',
-      help: '对应官方 agents.defaults.skipBootstrap；开启后不会自动补齐 BOOTSTRAP.md 等引导文件。',
-    },
-    {
-      path: 'agents.defaults.bootstrapMaxChars',
-      label: '单文件 Bootstrap 上限',
-      type: 'number',
-      placeholder: '20000',
-      help: '对应 agents.defaults.bootstrapMaxChars，用于限制单个核心文件注入上下文的最大字符数。',
-      integer: true,
-      min: 1,
-    },
-    {
-      path: 'agents.defaults.bootstrapTotalMaxChars',
-      label: '总 Bootstrap 上限',
-      type: 'number',
-      placeholder: '150000',
-      help: '对应 agents.defaults.bootstrapTotalMaxChars，用于限制全部 bootstrap 文件总注入量。',
-      integer: true,
-      min: 1,
-    },
-    {
-      path: 'agents.defaults.compaction.mode',
-      label: '压缩模式',
-      type: 'select',
-      options: ['default', 'safeguard'],
-      help: 'default 为常规裁剪；safeguard 会更保守地压缩工具结果。',
-    },
-    {
-      path: 'agents.defaults.compaction.maxHistoryShare',
-      label: '历史占比上限',
-      type: 'number',
-      placeholder: '0.5',
-      help: '控制历史消息最多可占上下文预算的比例。',
-      min: 0,
-      max: 1,
-    },
-  ];
 
   const normalizeConfigForSave = (input: any) => {
     const clone = cloneConfig(input || {});
@@ -1349,174 +1274,116 @@ export default function SystemConfig() {
       {/* === Identity & Messages Tab === */}
       {tab === 'identity' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-200">
-          <div className={`${modern ? 'page-modern-panel p-6' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-6'} space-y-5`}>
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-2xl bg-blue-100/80 dark:bg-blue-900/20 text-blue-600 border border-blue-100/70 dark:border-blue-800/30">
-                    <Key size={18} />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-900 dark:text-white">管理后台登录与身份入口</h3>
-                    <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                      这里把查看当前登录密码、修改密码，以及身份页的基本说明收进一个入口，避免顶部像几块独立拼图一样散开。
-                    </p>
-                  </div>
+          {/* Login password display + change */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-xl bg-blue-100/80 dark:bg-blue-900/20 text-blue-600 border border-blue-100/70 dark:border-blue-800/30">
+                  <Key size={16} />
                 </div>
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white">管理后台登录密码</h3>
               </div>
-              <div className="flex flex-wrap gap-2 text-[11px]">
-                <span className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-gray-500 dark:text-gray-400">
-                  文档数 {identityDocs.length}
-                </span>
-                <span className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-gray-500 dark:text-gray-400">
-                  当前 {selectedIdentityDoc?.name || '未选择'}
-                </span>
-              </div>
+              <AdminPasswordField token={adminToken} onCopy={() => { setMsg('密码已复制'); setTimeout(() => setMsg(''), 2000); }} />
+              <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                <span className="w-1 h-1 rounded-full bg-gray-400"></span>
+                此密码在 .env 文件中的 ADMIN_TOKEN 配置
+              </p>
             </div>
+            <ChangePasswordSection />
+          </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.95fr),minmax(0,1.05fr)] gap-5">
-              <div className="space-y-4">
-                <div className="rounded-[24px] border border-blue-100/80 dark:border-blue-900/40 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(239,246,255,0.7))] dark:bg-[linear-gradient(145deg,rgba(12,24,42,0.84),rgba(30,64,175,0.12))] p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-500/80">当前登录凭证</div>
-                      <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">管理后台登录密码</div>
-                    </div>
-                    <div className="rounded-full border border-blue-200/70 dark:border-blue-800/40 px-3 py-1 text-[11px] text-blue-600 dark:text-blue-300">
-                      `.env` / `ADMIN_TOKEN`
-                    </div>
-                  </div>
-                  <AdminPasswordField token={adminToken} onCopy={() => { setMsg('密码已复制'); setTimeout(() => setMsg(''), 2000); }} />
-                  <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                    <span className="w-1 h-1 rounded-full bg-gray-400"></span>
-                    仅用于当前面板管理后台登录，不影响 OpenClaw 自身的 provider / gateway 配置。
-                  </p>
-                </div>
-                <div className="rounded-[24px] border border-gray-100 dark:border-gray-800 bg-gray-50/75 dark:bg-gray-900/40 p-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-xl border border-white/80 dark:border-gray-800 bg-white/80 dark:bg-gray-950/30 px-3 py-3">
-                      <div className="text-[11px] text-gray-500">编辑顺序</div>
-                      <div className="mt-1 text-xs leading-relaxed text-gray-700 dark:text-gray-200">先改基础身份与登录入口，再处理文档内容。</div>
-                    </div>
-                    <div className="rounded-xl border border-white/80 dark:border-gray-800 bg-white/80 dark:bg-gray-950/30 px-3 py-3">
-                      <div className="text-[11px] text-gray-500">页面目标</div>
-                      <div className="mt-1 text-xs leading-relaxed text-gray-700 dark:text-gray-200">把“看密码、改密码、改人格”分出清晰层次。</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-gray-100 dark:border-gray-800 bg-white/90 dark:bg-slate-900/55 p-5">
-                <ChangePasswordSection embedded />
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-6">
+              <CfgSection title="身份设置" icon={Users} fields={[
+                { path: 'ui.assistant.name', label: '助手名称', type: 'text' as const, placeholder: 'OpenClaw' },
+                { path: 'ui.assistant.avatar', label: '助手头像', type: 'text' as const, placeholder: 'emoji或URL' },
+                { path: 'ui.seamColor', label: '主题色', type: 'text' as const, placeholder: '#7c3aed' },
+              ]} getVal={getVal} setVal={setVal} />
+              
+              <CfgSection title="消息配置" icon={MessageSquare} fields={[
+                { path: 'messages.responsePrefix', label: '回复前缀', type: 'text' as const, placeholder: '[OpenClaw]' },
+                { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
+                { path: 'messages.ackReactionScope', label: '确认反应范围', type: 'select' as const, options: ['all', 'group-mentions', 'group-all', 'direct', 'off', 'none'] },
+              ]} getVal={getVal} setVal={setVal} />
+            </div>
+            
+            <div className="space-y-6">
+              <CfgSection
+                title="Agent 默认设置"
+                icon={Brain}
+                description="这里控制所有 Agent 共享的默认上下文预算；当前 OpenClaw schema 不支持单 Agent 级 contextTokens / compaction 覆盖。"
+                defaultExpanded
+                fields={[
+                  {
+                    path: 'agents.defaults.contextTokens',
+                    label: '默认上下文 Token 预算',
+                    type: 'number' as const,
+                    placeholder: '200000',
+                    help: 'OpenClaw 会再与模型真实 contextWindow 取更小值；留空表示不在面板里显式覆盖。',
+                    integer: true,
+                    min: 1,
+                  },
+                  { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
+                  {
+                    path: 'agents.defaults.skipBootstrap',
+                    label: '跳过 Bootstrap 文件',
+                    type: 'toggle' as const,
+                    help: '对应官方 agents.defaults.skipBootstrap；开启后不会自动补齐 BOOTSTRAP.md 等引导文件。',
+                  },
+                  {
+                    path: 'agents.defaults.bootstrapMaxChars',
+                    label: '单文件 Bootstrap 上限',
+                    type: 'number' as const,
+                    placeholder: '20000',
+                    help: '对应 agents.defaults.bootstrapMaxChars，用于限制单个核心文件注入上下文的最大字符数。',
+                    integer: true,
+                    min: 1,
+                  },
+                  {
+                    path: 'agents.defaults.bootstrapTotalMaxChars',
+                    label: '总 Bootstrap 上限',
+                    type: 'number' as const,
+                    placeholder: '150000',
+                    help: '对应 agents.defaults.bootstrapTotalMaxChars，用于限制全部 bootstrap 文件总注入量。',
+                    integer: true,
+                    min: 1,
+                  },
+                  {
+                    path: 'agents.defaults.compaction.mode',
+                    label: '压缩模式',
+                    type: 'select' as const,
+                    options: ['default', 'safeguard'],
+                    help: 'default 为常规裁剪；safeguard 会更保守地压缩工具结果。',
+                  },
+                  {
+                    path: 'agents.defaults.compaction.maxHistoryShare',
+                    label: '历史占比上限',
+                    type: 'number' as const,
+                    placeholder: '0.5',
+                    help: '控制历史消息最多可占上下文预算的比例。',
+                    min: 0,
+                    max: 1,
+                  },
+                ]}
+                getVal={getVal}
+                setVal={setVal}
+              />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.35fr),minmax(320px,0.95fr)] gap-6 items-start">
-            <div className="space-y-4">
-              <div className={`${modern ? 'page-modern-panel p-5' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5'} space-y-4`}>
-                <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-900 dark:text-white">身份与消息外观</h3>
-                    <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                      这组配置决定面板里助手如何命名、如何显示，以及消息确认与会话维护的默认体验。
-                    </p>
-                  </div>
-                  <div className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-[11px] text-gray-500 dark:text-gray-400">
-                    先改外观，再改下面的 Markdown 身份文档
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
-              <CfgSection title="身份设置" icon={Users} defaultExpanded description="控制面板里助手的名称、头像和主题色，属于用户第一眼能看到的外观层。" fields={[
-                    { path: 'ui.assistant.name', label: '助手名称', type: 'text' as const, placeholder: 'OpenClaw' },
-                    { path: 'ui.assistant.avatar', label: '助手头像', type: 'text' as const, placeholder: 'emoji或URL' },
-                    { path: 'ui.seamColor', label: '主题色', type: 'text' as const, placeholder: '#7c3aed' },
-                  ]} getVal={getVal} setVal={setVal} />
-
-              <CfgSection title="消息配置" icon={MessageSquare} defaultExpanded description="控制默认回复前缀、会话条目维护上限，以及消息确认时使用的 reaction 策略。" fields={[
-                    { path: 'messages.responsePrefix', label: '回复前缀', type: 'text' as const, placeholder: '[OpenClaw]' },
-                    { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
-                    { path: 'messages.ackReactionScope', label: '确认反应范围', type: 'select' as const, options: ['all', 'group-mentions', 'group-all', 'direct', 'off', 'none'] },
-                  ]} getVal={getVal} setVal={setVal} />
-                </div>
+          {/* Identity MD files editor */}
+          <div className={`${modern ? 'page-modern-panel overflow-hidden flex flex-col h-[600px]' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden flex flex-col h-[600px]'}`}>
+            <div className="px-5 py-4 flex items-center gap-3 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/30">
+              <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600">
+                <FileText size={16} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white">身份文档 (Markdown)</h3>
+                <p className="text-xs text-gray-500 mt-0.5">编辑核心人格设定与系统提示词</p>
               </div>
             </div>
-
-            <div className="space-y-4">
-              <div className={`${modern ? 'page-modern-panel p-5' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5'} space-y-4`}>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 dark:text-white">Agent 默认上下文</h3>
-                  <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                    这一组是全局共享的 Agent 默认行为。它和身份文档不同，不负责“说什么”，而是控制默认上下文预算、Bootstrap 注入量和压缩策略。
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div className="rounded-[22px] border border-violet-100/80 dark:border-violet-900/40 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(245,243,255,0.72))] dark:bg-[linear-gradient(145deg,rgba(24,16,42,0.84),rgba(76,29,149,0.14))] p-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-xl border border-white/80 dark:border-gray-800 bg-white/80 dark:bg-gray-950/30 px-3 py-3">
-                        <div className="text-[11px] text-gray-500">默认上下文</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white font-mono">{getVal('agents.defaults.contextTokens') || '未显式设置'}</div>
-                      </div>
-                      <div className="rounded-xl border border-white/80 dark:border-gray-800 bg-white/80 dark:bg-gray-950/30 px-3 py-3">
-                        <div className="text-[11px] text-gray-500">压缩模式</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white font-mono">{getVal('agents.defaults.compaction.mode') || 'default'}</div>
-                      </div>
-                    </div>
-                    <div className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-                      对大多数场景，优先只调整 <span className="font-mono">contextTokens</span> 和 <span className="font-mono">compaction.mode</span>。其余项只在你明确需要精细控制 bootstrap 注入规模时再改。
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowAgentDefaultsModal(true)}
-                      className={`${modern ? 'page-modern-accent px-4 py-2 text-xs font-medium' : 'inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-xs font-medium text-white hover:bg-violet-700'}`}
-                    >
-                      <Brain size={13} />
-                      打开弹窗编辑
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className={`${modern ? 'page-modern-panel overflow-hidden flex flex-col min-h-[640px]' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden flex flex-col min-h-[640px]'}`}>
-            <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/30 space-y-3">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600">
-                    <FileText size={16} />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-900 dark:text-white">身份文档 (Markdown)</h3>
-                    <p className="text-xs text-gray-500 mt-0.5">编辑核心人格设定、系统提示词和附加说明文档</p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  <span className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-gray-500 dark:text-gray-400">
-                    文档数 {identityDocs.length}
-                  </span>
-                  <span className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-gray-500 dark:text-gray-400">
-                    当前 {selectedIdentityDoc?.name || '未选择'}
-                  </span>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/70 dark:bg-gray-900/40 px-4 py-3">
-                  <div className="text-[11px] text-gray-500 dark:text-gray-400">编辑顺序</div>
-                  <div className="mt-1 text-xs leading-relaxed text-gray-700 dark:text-gray-200">先选左侧文档，再在右侧集中编辑内容，最后单独保存。</div>
-                </div>
-                <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/70 dark:bg-gray-900/40 px-4 py-3">
-                  <div className="text-[11px] text-gray-500 dark:text-gray-400">适合放什么</div>
-                  <div className="mt-1 text-xs leading-relaxed text-gray-700 dark:text-gray-200">身份设定、输出风格、常驻规则和面向用户的长期提示。</div>
-                </div>
-                <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/70 dark:bg-gray-900/40 px-4 py-3">
-                  <div className="text-[11px] text-gray-500 dark:text-gray-400">与上方配置的区别</div>
-                  <div className="mt-1 text-xs leading-relaxed text-gray-700 dark:text-gray-200">上方字段管“配置行为”，这里管“提示内容”。</div>
-                </div>
-              </div>
-            </div>
-            <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px,minmax(0,1fr)] overflow-hidden min-h-0">
-              <div className="p-3 border-r border-gray-100 dark:border-gray-800 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 space-y-1 min-h-0">
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 overflow-hidden">
+              <div className="p-3 border-r border-gray-100 dark:border-gray-800 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 space-y-1">
                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-3 py-2">文件列表</h4>
                 {identityDocs.map((doc: any) => (
                   <button key={doc.name} onClick={() => { setSelectedIdentityDoc(doc); setIdentityContent(doc.content || ''); }}
@@ -1535,23 +1402,13 @@ export default function SystemConfig() {
                   </button>
                 ))}
               </div>
-              <div className="flex flex-col h-full bg-white dark:bg-gray-800 min-h-0">
+              <div className="lg:col-span-3 flex flex-col h-full bg-white dark:bg-gray-800">
                 {selectedIdentityDoc ? (
                   <>
-                    <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between bg-white dark:bg-gray-800 z-10">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <FileText size={14} className="text-gray-400" />
-                          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{selectedIdentityDoc.name}</span>
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                          <span className="rounded-full border border-gray-200 dark:border-gray-700 px-2.5 py-1">
-                            {selectedIdentityDoc.exists === false ? '未创建' : '已存在'}
-                          </span>
-                          <span className="rounded-full border border-gray-200 dark:border-gray-700 px-2.5 py-1">
-                            {(selectedIdentityDoc.size / 1024).toFixed(1)} KB
-                          </span>
-                        </div>
+                    <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-800 z-10">
+                      <div className="flex items-center gap-2">
+                        <FileText size={14} className="text-gray-400" />
+                        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{selectedIdentityDoc.name}</span>
                       </div>
                       <button onClick={async () => {
                         setIdentitySaving(true);
@@ -1582,204 +1439,48 @@ export default function SystemConfig() {
               </div>
             </div>
           </div>
-
-          {showAgentDefaultsModal && (
-            <div className="fixed inset-0 bg-black/55 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowAgentDefaultsModal(false)}>
-              <div
-                className={`${modern ? 'w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-[28px] bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(245,243,255,0.72))] dark:bg-[linear-gradient(145deg,rgba(12,24,42,0.94),rgba(76,29,149,0.14))] border border-violet-100/70 dark:border-violet-800/20 shadow-xl backdrop-blur-xl flex flex-col' : 'w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 shadow-xl flex flex-col'}`}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                      <Brain size={16} className="text-violet-500" />
-                      Agent 默认设置
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                      用弹窗单独编辑高密度参数，避免身份页右侧长期挂着一大块配置表单。
-                    </p>
-                  </div>
-                  <button onClick={() => setShowAgentDefaultsModal(false)} className={`${modern ? 'page-modern-action px-2.5 py-1.5 text-xs' : 'px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700'}`}>
-                    关闭
-                  </button>
-                </div>
-                <div className="p-5 overflow-y-auto">
-                  <CfgSection
-                    title="Agent 默认设置"
-                    icon={Brain}
-                    description="这里控制所有 Agent 共享的默认上下文预算；当前 OpenClaw schema 不支持单 Agent 级 contextTokens / compaction 覆盖。"
-                    defaultExpanded
-                    fields={agentDefaultsFields}
-                    getVal={getVal}
-                    setVal={setVal}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
       {/* === General Config Tab === */}
       {tab === 'general' && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-200">
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className={`${modern ? 'page-modern-panel p-5' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5'} space-y-2`}>
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-xl bg-blue-100/80 dark:bg-blue-900/20 text-blue-600 border border-blue-100/70 dark:border-blue-800/30">
-                  <Globe size={16} />
-                </div>
-                <h3 className="text-sm font-bold text-gray-900 dark:text-white">基础接入</h3>
-              </div>
-              <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                先确定网关、认证和系统级密钥，再往下调协同、搜索和自动化。这样层级会更接近 OpenClaw 自己的运行模型。
-              </p>
-            </div>
-            <div className={`${modern ? 'page-modern-panel p-5' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5'} space-y-2`}>
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-xl bg-violet-100/80 dark:bg-violet-900/20 text-violet-600 border border-violet-100/70 dark:border-violet-800/30">
-                  <Users size={16} />
-                </div>
-                <h3 className="text-sm font-bold text-gray-900 dark:text-white">Agent / 会话治理</h3>
-              </div>
-              <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                这部分控制上下文隔离、工具暴露范围、跨 Agent 委托和命令安全边界，适合一起看，不再被分散在长列表里。
-              </p>
-            </div>
-            <div className={`${modern ? 'page-modern-panel p-5' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5'} space-y-2`}>
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-xl bg-emerald-100/80 dark:bg-emerald-900/20 text-emerald-600 border border-emerald-100/70 dark:border-emerald-800/30">
-                  <RefreshCw size={16} />
-                </div>
-                <h3 className="text-sm font-bold text-gray-900 dark:text-white">自动化与运维</h3>
-              </div>
-              <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                Cron、Heartbeat、命令和调试预览单独放在后面，减少“基础配置”和“运行时维护”混在一起的感觉。
-              </p>
-            </div>
-          </div>
-
-          <ConfigGroup
-            title="基础接入"
-            description="先把 OpenClaw 对外入口、认证方式和基础密钥整理好。这里的内容最接近“机器怎么连起来”。"
-          >
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <CfgSection title="网关配置" icon={Globe} defaultExpanded description="决定 OpenClaw Control / Gateway 监听在哪、怎么暴露、是否要求认证访问。" fields={[
-                { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789', integer: true, min: 1, max: 65535 },
-                { path: 'gateway.mode', label: '模式', type: 'select' as const, options: ['local', 'remote'] },
-                { path: 'gateway.bind', label: '绑定', type: 'select' as const, options: ['auto', 'loopback', 'lan', 'tailnet', 'custom'] },
-                { path: 'gateway.customBindHost', label: '自定义绑定地址', type: 'text' as const, placeholder: '0.0.0.0 / 127.0.0.1 / ::1' },
-                { path: 'gateway.auth.mode', label: '认证模式', type: 'select' as const, options: ['none', 'token', 'password', 'trusted-proxy'] },
-                { path: 'gateway.auth.token', label: '认证Token', type: 'password' as const },
-              ]} getVal={getVal} setVal={setVal} />
-              <CfgSection title="Hooks" icon={Webhook} description="给外部系统调用 OpenClaw 用的 webhook 入口。适合让 CI、监控、脚本或第三方服务主动推事件进来。" fields={[
-                { path: 'hooks.enabled', label: '启用Hooks', type: 'toggle' as const },
-                { path: 'hooks.path', label: '基础路径', type: 'text' as const, placeholder: '/hooks' },
-                { path: 'hooks.token', label: 'Webhook密钥', type: 'password' as const },
-              ]} getVal={getVal} setVal={setVal} />
-            </div>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <CfgSection title="认证密钥" icon={Key} description="给 OpenClaw 自己去调用上游模型服务时用的 API Key，不是面板登录密码，也不是 webhook 密钥。" fields={[
-                { path: 'env.vars.ANTHROPIC_API_KEY', label: 'Anthropic API Key', type: 'password' as const },
-                { path: 'env.vars.OPENAI_API_KEY', label: 'OpenAI API Key', type: 'password' as const },
-                { path: 'env.vars.GOOGLE_API_KEY', label: 'Google API Key', type: 'password' as const },
-              ]} getVal={getVal} setVal={setVal} />
-            </div>
-          </ConfigGroup>
-
-          <ConfigGroup
-            title="Agent / 会话治理"
-            description="把上下文隔离、工具可见性、委托和命令安全收拢到一处，便于按“模型能看到什么、能做什么”来统一判断。"
-          >
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <CfgSection title="多智能体协同" icon={Users} defaultExpanded description="控制 Agent 之间是否允许互相委托、可见哪些会话，以及跨 Agent 协作的基本边界。" fields={[
-                { path: 'tools.agentToAgent.enabled', label: '启用 Agent 间委托', type: 'toggle' as const },
-                { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
-                { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['self', 'tree', 'agent', 'all'], help: '官方枚举：self=仅当前会话，tree=当前会话及其子会话，agent=当前 Agent 的全部会话，all=全部会话。' },
-                { path: 'session.dmScope', label: '私聊隔离范围', type: 'select' as const, options: ['main', 'per-peer', 'per-channel-peer', 'per-account-channel-peer'] },
-              ]} getVal={getVal} setVal={setVal} />
-              <CfgSection title="命令执行安全" icon={Terminal} description="控制 exec/shell 工具的安全边界" defaultExpanded fields={[
-                { path: 'tools.exec.timeoutSec', label: '超时（秒）', type: 'number' as const, placeholder: '30', integer: true, min: 1, help: '单次命令最大执行时长，超时后进程会被强制终止。' },
-                { path: 'tools.exec.security', label: '安全模式', type: 'select' as const, options: ['deny', 'allowlist', 'full'], help: 'deny = 默认拒绝；allowlist = 仅 safeBins 白名单；full = 完全放开（高风险）。' },
-                { path: 'tools.exec.ask', label: '审批模式', type: 'select' as const, options: ['off', 'on-miss', 'always'], help: 'off = 不额外审批；on-miss = 未命中白名单时审批；always = 总是审批。' },
-              ]} getVal={getVal} setVal={setVal} />
-            </div>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <SessionIsolationSection config={config} updateConfig={updateConfig} />
-              <ToolGovernanceSection config={config} updateConfig={updateConfig} />
-            </div>
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr),minmax(0,1fr),minmax(0,1.15fr)] gap-4">
-              <BrowserControlSection config={config} updateConfig={updateConfig} />
-              <div className="page-modern-panel p-5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">命令白名单 <InfoTooltip size={14} content={<>字段路径：<code className="font-mono text-[11px]">tools.exec.safeBins</code></>} /></h3>
-                </div>
-                <input
-                  value={(() => {
-                    const raw = getVal('tools.exec.safeBins');
-                    if (Array.isArray(raw)) return raw.join(', ');
-                    if (typeof raw === 'string') return raw;
-                    return '';
-                  })()}
-                  onChange={e => {
-                    const list = parseConfigListInput(e.target.value);
-                    setVal('tools.exec.safeBins', list.length > 0 ? list : undefined);
-                  }}
-                  placeholder="例如: ls, cat, echo, grep, git"
-                  className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono"
-                />
-                <p className="text-[11px] text-gray-500">逗号分隔；security=allowlist 时 Agent 只能调用列表内的可执行文件。保存时写为数组。</p>
-              </div>
-              <div className={`${modern ? 'page-modern-panel p-5 space-y-2' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-2'}`}>
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">Agent 间委托白名单 <InfoTooltip size={14} content={<>字段路径：<code className="font-mono text-[11px]">tools.agentToAgent.allow</code></>} /></h3>
-                </div>
-                <input
-                  value={(() => {
-                    const raw = getVal('tools.agentToAgent.allow');
-                    if (Array.isArray(raw)) return raw.join(', ');
-                    if (typeof raw === 'string') return raw;
-                    return '';
-                  })()}
-                  onChange={e => {
-                    const list = parseConfigListInput(e.target.value);
-                    setVal('tools.agentToAgent.allow', list);
-                  }}
-                  placeholder="例如: *, main->work, work->main"
-                  className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono"
-                />
-                <p className="text-[11px] text-gray-500">用逗号分隔规则；保存时会写为数组。</p>
-              </div>
-            </div>
-          </ConfigGroup>
-
-          <ConfigGroup
-            title="搜索与外部信息"
-            description="这里集中放 Web 搜索 provider、Codex 原生搜索和对应凭证，避免和命令安全、Agent 治理混在一块。"
-          >
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr),minmax(0,0.85fr)] gap-4">
-              <CfgSection title="Web 搜索工具" icon={Search} defaultExpanded description="同步 OpenClaw 2026.4.x 的 provider、原生 Codex 搜索与缓存控制" fields={[
-                { path: 'tools.web.search.enabled', label: '启用 Web 搜索', type: 'toggle' as const },
-                { path: 'tools.web.search.provider', label: '搜索提供商', type: 'select' as const, options: [...WEB_SEARCH_PROVIDERS], help: '支持 brave / duckduckgo / exa / firecrawl / gemini / grok / kimi / minimax / ollama / perplexity / searxng / tavily；留空则由 OpenClaw 自动探测。' },
-                { path: 'tools.web.search.maxResults', label: '最大结果数', type: 'number' as const, placeholder: '5', integer: true, min: 1, max: 20, help: '通用 web_search 返回条数；多数 provider 仍建议保持在较小范围。' },
-                { path: 'tools.web.search.timeoutSeconds', label: '超时（秒）', type: 'number' as const, placeholder: '30', integer: true, min: 1, max: 300 },
-                { path: 'tools.web.search.cacheTtlMinutes', label: '缓存 TTL（分钟）', type: 'number' as const, placeholder: '15', integer: true, min: 0, max: 1440 },
-                { path: 'tools.web.search.openaiCodex.enabled', label: '启用 Codex 原生搜索', type: 'toggle' as const },
-                { path: 'tools.web.search.openaiCodex.mode', label: 'Codex 搜索模式', type: 'select' as const, options: ['cached', 'live'], help: '仅对 Codex-capable 模型生效；官方推荐 cached。' },
-                { path: 'tools.web.search.openaiCodex.allowedDomains', label: 'Codex 域名白名单', type: 'textarea' as const, placeholder: 'example.com, docs.openai.com', help: '保存时写为数组；限制原生 Codex 搜索可访问的域名。' },
-                { path: 'tools.web.search.openaiCodex.contextSize', label: 'Codex 上下文大小', type: 'select' as const, options: ['low', 'medium', 'high'] },
-                { path: 'tools.web.search.openaiCodex.userLocation.country', label: 'Codex 用户国家', type: 'text' as const, placeholder: 'US' },
-                { path: 'tools.web.search.openaiCodex.userLocation.city', label: 'Codex 用户城市', type: 'text' as const, placeholder: 'New York' },
-                { path: 'tools.web.search.openaiCodex.userLocation.timezone', label: 'Codex 用户时区', type: 'text' as const, placeholder: 'America/New_York' },
-              ]} getVal={getVal} setVal={(path, value) => {
-                if (path === 'tools.web.search.openaiCodex.allowedDomains') {
-                  const list = parseConfigListInput(String(value || ''));
-                  setVal(path, list.length > 0 ? list : undefined);
-                  return;
-                }
-                setVal(path, value);
-              }} />
-              <div className={`${modern ? 'page-modern-panel p-5 space-y-4' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-4'}`}>
+        <div className="space-y-3">
+          <CfgSection title="网关配置" icon={Globe} fields={[
+            { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789', integer: true, min: 1, max: 65535 },
+            { path: 'gateway.mode', label: '模式', type: 'select' as const, options: ['local', 'remote'] },
+            { path: 'gateway.bind', label: '绑定', type: 'select' as const, options: ['auto', 'loopback', 'lan', 'tailnet', 'custom'] },
+            { path: 'gateway.customBindHost', label: '自定义绑定地址', type: 'text' as const, placeholder: '0.0.0.0 / 127.0.0.1 / ::1' },
+            { path: 'gateway.auth.mode', label: '认证模式', type: 'select' as const, options: ['none', 'token', 'password', 'trusted-proxy'] },
+            { path: 'gateway.auth.token', label: '认证Token', type: 'password' as const },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="多智能体协同" icon={Users} fields={[
+            { path: 'tools.agentToAgent.enabled', label: '启用 Agent 间委托', type: 'toggle' as const },
+            { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
+            { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['self', 'tree', 'agent', 'all'], help: '官方枚举：self=仅当前会话，tree=当前会话及其子会话，agent=当前 Agent 的全部会话，all=全部会话。' },
+            { path: 'session.dmScope', label: '私聊隔离范围', type: 'select' as const, options: ['main', 'per-peer', 'per-channel-peer', 'per-account-channel-peer'] },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="Web 搜索工具" icon={Search} description="同步 OpenClaw 2026.4.x 的 provider、原生 Codex 搜索与缓存控制" fields={[
+            { path: 'tools.web.search.enabled', label: '启用 Web 搜索', type: 'toggle' as const },
+            { path: 'tools.web.search.provider', label: '搜索提供商', type: 'select' as const, options: [...WEB_SEARCH_PROVIDERS], help: '支持 brave / duckduckgo / exa / firecrawl / gemini / grok / kimi / minimax / ollama / perplexity / searxng / tavily；留空则由 OpenClaw 自动探测。' },
+            { path: 'tools.web.search.maxResults', label: '最大结果数', type: 'number' as const, placeholder: '5', integer: true, min: 1, max: 20, help: '通用 web_search 返回条数；多数 provider 仍建议保持在较小范围。' },
+            { path: 'tools.web.search.timeoutSeconds', label: '超时（秒）', type: 'number' as const, placeholder: '30', integer: true, min: 1, max: 300 },
+            { path: 'tools.web.search.cacheTtlMinutes', label: '缓存 TTL（分钟）', type: 'number' as const, placeholder: '15', integer: true, min: 0, max: 1440 },
+            { path: 'tools.web.search.openaiCodex.enabled', label: '启用 Codex 原生搜索', type: 'toggle' as const },
+            { path: 'tools.web.search.openaiCodex.mode', label: 'Codex 搜索模式', type: 'select' as const, options: ['cached', 'live'], help: '仅对 Codex-capable 模型生效；官方推荐 cached。' },
+            { path: 'tools.web.search.openaiCodex.allowedDomains', label: 'Codex 域名白名单', type: 'textarea' as const, placeholder: 'example.com, docs.openai.com', help: '保存时写为数组；限制原生 Codex 搜索可访问的域名。' },
+            { path: 'tools.web.search.openaiCodex.contextSize', label: 'Codex 上下文大小', type: 'select' as const, options: ['low', 'medium', 'high'] },
+            { path: 'tools.web.search.openaiCodex.userLocation.country', label: 'Codex 用户国家', type: 'text' as const, placeholder: 'US' },
+            { path: 'tools.web.search.openaiCodex.userLocation.city', label: 'Codex 用户城市', type: 'text' as const, placeholder: 'New York' },
+            { path: 'tools.web.search.openaiCodex.userLocation.timezone', label: 'Codex 用户时区', type: 'text' as const, placeholder: 'America/New_York' },
+          ]} getVal={getVal} setVal={(path, value) => {
+            if (path === 'tools.web.search.openaiCodex.allowedDomains') {
+              const list = parseConfigListInput(String(value || ''));
+              setVal(path, list.length > 0 ? list : undefined);
+              return;
+            }
+            setVal(path, value);
+          }} />
+          <div className={`${modern ? 'page-modern-panel p-5 space-y-4' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-4'}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-sm font-bold text-gray-900 dark:text-white">当前搜索 Provider 凭证</h3>
@@ -1849,59 +1550,106 @@ export default function SystemConfig() {
                 选择固定 provider 后，这里会显示对应的凭证和附加配置。若保持 <span className="font-mono">auto</span>，OpenClaw 会按官方优先级自动探测可用 provider。
               </div>
             )}
-              </div>
+          </div>
+          <CfgSection title="命令执行安全" icon={Terminal} description="控制 exec/shell 工具的安全边界" fields={[
+            { path: 'tools.exec.timeoutSec', label: '超时（秒）', type: 'number' as const, placeholder: '30', integer: true, min: 1, help: '单次命令最大执行时长，超时后进程会被强制终止。' },
+            { path: 'tools.exec.security', label: '安全模式', type: 'select' as const, options: ['deny', 'allowlist', 'full'], help: 'deny = 默认拒绝；allowlist = 仅 safeBins 白名单；full = 完全放开（高风险）。' },
+            { path: 'tools.exec.ask', label: '审批模式', type: 'select' as const, options: ['off', 'on-miss', 'always'], help: 'off = 不额外审批；on-miss = 未命中白名单时审批；always = 总是审批。' },
+          ]} getVal={getVal} setVal={setVal} />
+          <div className="page-modern-panel p-5 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">命令白名单 <InfoTooltip size={14} content={<>字段路径：<code className="font-mono text-[11px]">tools.exec.safeBins</code></>} /></h3>
             </div>
-          </ConfigGroup>
-
-          <ConfigGroup
-            title="自动化与运行维护"
-            description="把周期任务、心跳、命令开关和只读调试预览放在最后，更符合“先连通，再治理，最后运维”的阅读顺序。"
-          >
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <CfgSection title="Cron 自动化" icon={RefreshCw} description="配置 OpenClaw 内建调度器与故障治理策略" fields={[
-                { path: 'cron.enabled', label: '启用 Cron', type: 'toggle' as const },
-                { path: 'cron.store', label: '存储路径(可选)', type: 'text' as const, placeholder: '/path/to/cron/jobs.json', help: '留空使用 OpenClaw 默认路径；仅在需要自定义持久化位置时填写。' },
-                { path: 'cron.maxConcurrentRuns', label: '最大并发任务', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
-                { path: 'cron.retry.maxAttempts', label: '最大重试次数', type: 'number' as const, placeholder: '3', integer: true, min: 0 },
-                { path: 'cron.retry.backoffMs', label: '重试退避毫秒数组(JSON)', type: 'text' as const, placeholder: '[30000, 60000, 300000]', help: 'OpenClaw 期望数组；例如 [30000, 60000, 300000]。' },
-                { path: 'cron.webhook', label: 'Cron Webhook 入口', type: 'text' as const, placeholder: 'https://example.com/hooks/cron' },
-                { path: 'cron.webhookToken', label: 'Cron Webhook Token', type: 'password' as const },
-                { path: 'cron.failureAlert.enabled', label: '失败告警', type: 'toggle' as const },
-                { path: 'cron.failureAlert.after', label: '连续失败阈值', type: 'number' as const, placeholder: '1', integer: true, min: 1 },
-                { path: 'cron.failureAlert.cooldownMs', label: '告警冷却毫秒', type: 'number' as const, placeholder: '60000', integer: true, min: 0 },
-                { path: 'cron.failureAlert.mode', label: '告警模式', type: 'select' as const, options: ['announce', 'webhook'] },
-                { path: 'cron.failureAlert.accountId', label: '告警账号(accountId)', type: 'text' as const, placeholder: 'default' },
-                { path: 'cron.failureDestination.mode', label: '默认失败目的地模式', type: 'select' as const, options: ['announce', 'webhook'] },
-                { path: 'cron.failureDestination.channel', label: '默认失败目的地通道', type: 'text' as const, placeholder: 'telegram / feishu / last ...' },
-                { path: 'cron.failureDestination.to', label: '默认失败目的地 to', type: 'text' as const, placeholder: 'oc://channel/ops 或 webhook URL' },
-                { path: 'cron.failureDestination.accountId', label: '默认失败目的地账号(accountId)', type: 'text' as const, placeholder: 'default' },
-                { path: 'cron.runLog.maxBytes', label: '运行日志最大字节', type: 'number' as const, placeholder: '2097152', integer: true, min: 1 },
-                { path: 'cron.runLog.keepLines', label: '运行日志保留行数', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
-              ]} getVal={getVal} setVal={setVal} />
-              <CfgSection title="Heartbeat 自动化" icon={RefreshCw} description="配置 Agent 默认心跳节奏与投递策略（agents.defaults.heartbeat）" fields={[
-                { path: 'agents.defaults.heartbeat.every', label: '心跳间隔', type: 'text' as const, placeholder: '30m', help: '支持如 30m / 1h / 15m 等持续时间。' },
-                { path: 'agents.defaults.heartbeat.target', label: '心跳目标', type: 'select' as const, options: ['none', 'last', 'telegram', 'whatsapp', 'discord', 'irc', 'googlechat', 'slack', 'signal', 'imessage', 'line', 'feishu', 'wecom', 'qq'], help: 'none=仅自检，last=最近通道，其余为固定通道ID。' },
-                { path: 'agents.defaults.heartbeat.to', label: '固定目标 (to)', type: 'text' as const, placeholder: 'oc://channel/xxx' },
-                { path: 'agents.defaults.heartbeat.accountId', label: '账号标识 (accountId)', type: 'text' as const, placeholder: 'default' },
-                { path: 'agents.defaults.heartbeat.prompt', label: '心跳提示词', type: 'textarea' as const, placeholder: '请做轻量自检并回报关键状态。' },
-                { path: 'agents.defaults.heartbeat.ackMaxChars', label: '最大确认字符数', type: 'number' as const, placeholder: '300', integer: true, min: 0 },
-                { path: 'agents.defaults.heartbeat.lightContext', label: '轻量上下文', type: 'toggle' as const },
-                { path: 'agents.defaults.heartbeat.includeReasoning', label: '包含推理摘要', type: 'toggle' as const },
-              ]} getVal={getVal} setVal={setVal} />
+            <input
+              value={(() => {
+                const raw = getVal('tools.exec.safeBins');
+                if (Array.isArray(raw)) return raw.join(', ');
+                if (typeof raw === 'string') return raw;
+                return '';
+              })()}
+              onChange={e => {
+                const list = parseConfigListInput(e.target.value);
+                setVal('tools.exec.safeBins', list.length > 0 ? list : undefined);
+              }}
+              placeholder="例如: ls, cat, echo, grep, git"
+              className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono"
+            />
+            <p className="text-[11px] text-gray-500">逗号分隔；security=allowlist 时 Agent 只能调用列表内的可执行文件。保存时写为数组。</p>
+          </div>
+          <SessionIsolationSection config={config} updateConfig={updateConfig} />
+          <BrowserControlSection config={config} updateConfig={updateConfig} />
+          <ToolGovernanceSection config={config} updateConfig={updateConfig} />
+          <div className={`${modern ? 'page-modern-panel p-5 space-y-2' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-2'}`}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">Agent 间委托白名单 <InfoTooltip size={14} content={<>字段路径：<code className="font-mono text-[11px]">tools.agentToAgent.allow</code></>} /></h3>
             </div>
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr),minmax(0,1.1fr)] gap-4">
-              <CfgSection title="命令配置" icon={Terminal} description="控制 OpenClaw 是否启用原生命令、原生技能，以及是否允许执行重启这类更敏感的命令。" fields={[
-                { path: 'commands.native', label: '原生命令', type: 'select' as const, options: ['auto', 'on', 'off'] },
-                { path: 'commands.nativeSkills', label: '原生技能', type: 'select' as const, options: ['auto', 'on', 'off'] },
-                { path: 'commands.restart', label: '允许重启', type: 'toggle' as const },
-              ]} getVal={getVal} setVal={setVal} />
-              <details className={`${modern ? 'page-modern-panel overflow-hidden' : 'card'}`}>
-                <summary className="px-4 py-3 text-xs font-medium text-gray-500 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50">高级 JSON 只读预览</summary>
-                <div className="px-4 pt-2 text-[11px] text-gray-400">以下内容为当前编辑态配置快照（只读），保存前会先弹出差异预览。</div>
-                <pre className="px-4 pb-4 text-[11px] text-gray-600 dark:text-gray-400 overflow-x-auto max-h-96 overflow-y-auto font-mono">{JSON.stringify(config, null, 2)}</pre>
-              </details>
-            </div>
-          </ConfigGroup>
+            <input
+              value={(() => {
+                const raw = getVal('tools.agentToAgent.allow');
+                if (Array.isArray(raw)) return raw.join(', ');
+                if (typeof raw === 'string') return raw;
+                return '';
+              })()}
+              onChange={e => {
+                const list = parseConfigListInput(e.target.value);
+                setVal('tools.agentToAgent.allow', list);
+              }}
+              placeholder="例如: *, main->work, work->main"
+              className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono"
+            />
+            <p className="text-[11px] text-gray-500">用逗号分隔规则；保存时会写为数组。</p>
+          </div>
+          <CfgSection title="Hooks" icon={Webhook} fields={[
+            { path: 'hooks.enabled', label: '启用Hooks', type: 'toggle' as const },
+            { path: 'hooks.path', label: '基础路径', type: 'text' as const, placeholder: '/hooks' },
+            { path: 'hooks.token', label: 'Webhook密钥', type: 'password' as const },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="Cron 自动化" icon={RefreshCw} description="配置 OpenClaw 内建调度器与故障治理策略" fields={[
+            { path: 'cron.enabled', label: '启用 Cron', type: 'toggle' as const },
+            { path: 'cron.store', label: '存储路径(可选)', type: 'text' as const, placeholder: '/path/to/cron/jobs.json', help: '留空使用 OpenClaw 默认路径；仅在需要自定义持久化位置时填写。' },
+            { path: 'cron.maxConcurrentRuns', label: '最大并发任务', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
+            { path: 'cron.retry.maxAttempts', label: '最大重试次数', type: 'number' as const, placeholder: '3', integer: true, min: 0 },
+            { path: 'cron.retry.backoffMs', label: '重试退避毫秒数组(JSON)', type: 'text' as const, placeholder: '[30000, 60000, 300000]', help: 'OpenClaw 期望数组；例如 [30000, 60000, 300000]。' },
+            { path: 'cron.webhook', label: 'Cron Webhook 入口', type: 'text' as const, placeholder: 'https://example.com/hooks/cron' },
+            { path: 'cron.webhookToken', label: 'Cron Webhook Token', type: 'password' as const },
+            { path: 'cron.failureAlert.enabled', label: '失败告警', type: 'toggle' as const },
+            { path: 'cron.failureAlert.after', label: '连续失败阈值', type: 'number' as const, placeholder: '1', integer: true, min: 1 },
+            { path: 'cron.failureAlert.cooldownMs', label: '告警冷却毫秒', type: 'number' as const, placeholder: '60000', integer: true, min: 0 },
+            { path: 'cron.failureAlert.mode', label: '告警模式', type: 'select' as const, options: ['announce', 'webhook'] },
+            { path: 'cron.failureAlert.accountId', label: '告警账号(accountId)', type: 'text' as const, placeholder: 'default' },
+            { path: 'cron.failureDestination.mode', label: '默认失败目的地模式', type: 'select' as const, options: ['announce', 'webhook'] },
+            { path: 'cron.failureDestination.channel', label: '默认失败目的地通道', type: 'text' as const, placeholder: 'telegram / feishu / last ...' },
+            { path: 'cron.failureDestination.to', label: '默认失败目的地 to', type: 'text' as const, placeholder: 'oc://channel/ops 或 webhook URL' },
+            { path: 'cron.failureDestination.accountId', label: '默认失败目的地账号(accountId)', type: 'text' as const, placeholder: 'default' },
+            { path: 'cron.runLog.maxBytes', label: '运行日志最大字节', type: 'number' as const, placeholder: '2097152', integer: true, min: 1 },
+            { path: 'cron.runLog.keepLines', label: '运行日志保留行数', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="Heartbeat 自动化" icon={RefreshCw} description="配置 Agent 默认心跳节奏与投递策略（agents.defaults.heartbeat）" fields={[
+            { path: 'agents.defaults.heartbeat.every', label: '心跳间隔', type: 'text' as const, placeholder: '30m', help: '支持如 30m / 1h / 15m 等持续时间。' },
+            { path: 'agents.defaults.heartbeat.target', label: '心跳目标', type: 'select' as const, options: ['none', 'last', 'telegram', 'whatsapp', 'discord', 'irc', 'googlechat', 'slack', 'signal', 'imessage', 'line', 'feishu', 'wecom', 'qq'], help: 'none=仅自检，last=最近通道，其余为固定通道ID。' },
+            { path: 'agents.defaults.heartbeat.to', label: '固定目标 (to)', type: 'text' as const, placeholder: 'oc://channel/xxx' },
+            { path: 'agents.defaults.heartbeat.accountId', label: '账号标识 (accountId)', type: 'text' as const, placeholder: 'default' },
+            { path: 'agents.defaults.heartbeat.prompt', label: '心跳提示词', type: 'textarea' as const, placeholder: '请做轻量自检并回报关键状态。' },
+            { path: 'agents.defaults.heartbeat.ackMaxChars', label: '最大确认字符数', type: 'number' as const, placeholder: '300', integer: true, min: 0 },
+            { path: 'agents.defaults.heartbeat.lightContext', label: '轻量上下文', type: 'toggle' as const },
+            { path: 'agents.defaults.heartbeat.includeReasoning', label: '包含推理摘要', type: 'toggle' as const },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="命令配置" icon={Terminal} fields={[
+            { path: 'commands.native', label: '原生命令', type: 'select' as const, options: ['auto', 'on', 'off'] },
+            { path: 'commands.nativeSkills', label: '原生技能', type: 'select' as const, options: ['auto', 'on', 'off'] },
+            { path: 'commands.restart', label: '允许重启', type: 'toggle' as const },
+          ]} getVal={getVal} setVal={setVal} />
+          <CfgSection title="认证密钥" icon={Key} fields={[
+            { path: 'env.vars.ANTHROPIC_API_KEY', label: 'Anthropic API Key', type: 'password' as const },
+            { path: 'env.vars.OPENAI_API_KEY', label: 'OpenAI API Key', type: 'password' as const },
+            { path: 'env.vars.GOOGLE_API_KEY', label: 'Google API Key', type: 'password' as const },
+          ]} getVal={getVal} setVal={setVal} />
+          <SudoPasswordSection />
+          <details className={`${modern ? 'page-modern-panel overflow-hidden' : 'card'}`}>
+            <summary className="px-4 py-3 text-xs font-medium text-gray-500 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50">高级 JSON 只读预览</summary>
+            <div className="px-4 pt-2 text-[11px] text-gray-400">以下内容为当前编辑态配置快照（只读），保存前会先弹出差异预览。</div>
+            <pre className="px-4 pb-4 text-[11px] text-gray-600 dark:text-gray-400 overflow-x-auto max-h-96 overflow-y-auto font-mono">{JSON.stringify(config, null, 2)}</pre>
+          </details>
         </div>
       )}
 
@@ -2304,7 +2052,7 @@ function SudoPasswordSection() {
   );
 }
 
-function ChangePasswordSection({ embedded = false }: { embedded?: boolean }) {
+function ChangePasswordSection() {
   const { t } = useI18n();
   const [oldPwd, setOldPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
@@ -2332,53 +2080,6 @@ function ChangePasswordSection({ embedded = false }: { embedded?: boolean }) {
     finally { setSaving(false); setTimeout(() => setMsg(''), 4000); }
   };
 
-  const body = (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <input type="password" value={oldPwd} onChange={e => setOldPwd(e.target.value)}
-          placeholder={t.sysConfig?.currentPassword || '当前密码'}
-          className="w-full px-4 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
-        <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)}
-          placeholder={t.sysConfig?.newPassword || '新密码'}
-          className="w-full px-4 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
-        <input type="password" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)}
-          placeholder={t.sysConfig?.confirmPassword || '确认新密码'}
-          className="w-full px-4 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
-      </div>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-          修改后会自动退出当前登录态，重新使用新密码进入面板。
-        </p>
-        <button onClick={handleChange} disabled={saving || !oldPwd || !newPwd || !confirmPwd}
-          className="px-4 py-2.5 text-xs font-medium page-modern-accent disabled:opacity-50">
-          {saving ? '修改中...' : (t.sysConfig?.changePasswordBtn || '修改密码')}
-        </button>
-      </div>
-      {msg && (
-        <div className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border ${msgOk ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/30' : 'text-red-600 bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/30'}`}>
-          {msgOk ? <CheckCircle size={12} /> : <AlertTriangle size={12} />} {msg}
-        </div>
-      )}
-    </div>
-  );
-
-  if (embedded) {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="p-1.5 rounded-xl bg-blue-100/80 dark:bg-blue-900/20 text-blue-600 border border-blue-100/70 dark:border-blue-800/30">
-            <Key size={16} />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t.sysConfig?.changePassword || '修改管理密码'}</h3>
-            <p className="text-[10px] text-gray-500 mt-0.5">{t.sysConfig?.changePasswordDesc || '修改 ClawPanel 管理后台登录密码，修改后需重新登录'}</p>
-          </div>
-        </div>
-        {body}
-      </div>
-    );
-  }
-
   return (
     <div className="page-modern-panel overflow-hidden">
       <div className="px-5 py-4 flex items-center gap-3 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/30">
@@ -2390,8 +2091,25 @@ function ChangePasswordSection({ embedded = false }: { embedded?: boolean }) {
           <p className="text-[10px] text-gray-500 mt-0.5">{t.sysConfig?.changePasswordDesc || '修改 ClawPanel 管理后台登录密码，修改后需重新登录'}</p>
         </div>
       </div>
-      <div className="p-5">
-        {body}
+      <div className="p-5 space-y-3">
+        <input type="password" value={oldPwd} onChange={e => setOldPwd(e.target.value)}
+          placeholder={t.sysConfig?.currentPassword || '当前密码'}
+          className="w-full px-4 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
+        <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)}
+          placeholder={t.sysConfig?.newPassword || '新密码'}
+          className="w-full px-4 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
+        <input type="password" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)}
+          placeholder={t.sysConfig?.confirmPassword || '确认新密码'}
+          className="w-full px-4 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400" />
+        <button onClick={handleChange} disabled={saving || !oldPwd || !newPwd || !confirmPwd}
+          className="w-full px-4 py-2.5 text-xs font-medium page-modern-accent disabled:opacity-50">
+          {saving ? '修改中...' : (t.sysConfig?.changePasswordBtn || '修改密码')}
+        </button>
+        {msg && (
+          <div className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border ${msgOk ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/30' : 'text-red-600 bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/30'}`}>
+            {msgOk ? <CheckCircle size={12} /> : <AlertTriangle size={12} />} {msg}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2733,18 +2451,12 @@ function ProviderHealthCheck({ pid, prov }: { pid: string; prov: any }) {
   );
 }
 
-function CfgSection({ title, icon: Icon, description, defaultExpanded = true, fields, getVal, setVal, storageKey }: {
-  title: string; icon: any; description?: string; defaultExpanded?: boolean; storageKey?: string;
+function CfgSection({ title, icon: Icon, description, defaultExpanded = false, fields, getVal, setVal }: {
+  title: string; icon: any; description?: string; defaultExpanded?: boolean;
   fields: CfgField[];
   getVal: (p: string) => any; setVal: (p: string, v: any) => void;
 }) {
-  const persistKey = storageKey || getExpandStateStorageKey(title);
-  const [expanded, setExpanded] = useState(() => readPersistedExpandState(persistKey, defaultExpanded));
-
-  useEffect(() => {
-    writePersistedExpandState(persistKey, expanded);
-  }, [expanded, persistKey]);
-
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <div className="page-modern-panel overflow-hidden transition-all hover:shadow-md">
       <button onClick={() => setExpanded(!expanded)}
@@ -2832,27 +2544,6 @@ function CfgSection({ title, icon: Icon, description, defaultExpanded = true, fi
   );
 }
 
-function ConfigGroup({ title, description, children }: {
-  title: string;
-  description: string;
-  children: any;
-}) {
-  return (
-    <section className="page-modern-panel p-6 space-y-5">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="max-w-3xl">
-          <h3 className="text-sm font-bold text-gray-900 dark:text-white">{title}</h3>
-          <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{description}</p>
-        </div>
-        <div className="h-px xl:h-auto xl:w-px self-stretch bg-gray-100 dark:bg-gray-800" />
-      </div>
-      <div className="space-y-4">
-        {children}
-      </div>
-    </section>
-  );
-}
-
 function SessionIsolationSection({
   config,
   updateConfig,
@@ -2860,9 +2551,7 @@ function SessionIsolationSection({
   config: any;
   updateConfig: (mutate: (draft: any) => void) => void;
 }) {
-  const persistKey = getExpandStateStorageKey('session-isolation');
-  const [expanded, setExpanded] = useState(() => readPersistedExpandState(persistKey, true));
-  useEffect(() => { writePersistedExpandState(persistKey, expanded); }, [expanded, persistKey]);
+  const [expanded, setExpanded] = useState(true);
   const rawDmScope = typeof readConfigValue(config, 'session.dmScope') === 'string'
     ? String(readConfigValue(config, 'session.dmScope')).trim()
     : '';
@@ -3068,9 +2757,7 @@ function ToolGovernanceSection({
   config: any;
   updateConfig: (mutate: (draft: any) => void) => void;
 }) {
-  const persistKey = getExpandStateStorageKey('tool-governance');
-  const [expanded, setExpanded] = useState(() => readPersistedExpandState(persistKey, true));
-  useEffect(() => { writePersistedExpandState(persistKey, expanded); }, [expanded, persistKey]);
+  const [expanded, setExpanded] = useState(true);
   const rawProfile = String(readConfigValue(config, 'tools.profile') || '').trim();
   const allowText = formatConfigList(readConfigValue(config, 'tools.allow'));
   const denyText = formatConfigList(readConfigValue(config, 'tools.deny'));
@@ -3318,9 +3005,7 @@ function BrowserControlSection({
   config: any;
   updateConfig: (mutate: (draft: any) => void) => void;
 }) {
-  const persistKey = getExpandStateStorageKey('browser-control');
-  const [expanded, setExpanded] = useState(() => readPersistedExpandState(persistKey, true));
-  useEffect(() => { writePersistedExpandState(persistKey, expanded); }, [expanded, persistKey]);
+  const [expanded, setExpanded] = useState(true);
   const browser = getBrowserConfigDraft(config);
   const enabled = getEffectiveBrowserEnabled(config);
   const rawDefaultProfile = getRawBrowserDefaultProfile(config);
