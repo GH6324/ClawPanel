@@ -51,6 +51,7 @@ export interface Translations {
     subtitle: string;
     passwordLabel: string;
     passwordPlaceholder: string;
+    demoPasswordHint: string;
     loginButton: string;
     loggingIn: string;
     wrongPassword: string;

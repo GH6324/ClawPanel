@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -31,6 +32,78 @@ var feishuAllPluginIDs = []string{canonicalFeishuOfficialPluginID, canonicalFeis
 
 // 企业微信机器人插件 ID（优先级从高到低：新 ID 优先）
 var wecomBotPluginIDs = []string{"wecom-openclaw-plugin", "wecom"}
+
+type openClawChannelCatalogItem struct {
+	ID           string                 `json:"id"`
+	Label        string                 `json:"label"`
+	Description  string                 `json:"description"`
+	Type         string                 `json:"type"`
+	Bundled      bool                   `json:"bundled"`
+	Channels     []string               `json:"channels,omitempty"`
+	EnvVars      []string               `json:"envVars,omitempty"`
+	ConfigSchema map[string]interface{} `json:"configSchema,omitempty"`
+	UIHints      map[string]interface{} `json:"uiHints,omitempty"`
+}
+
+type openClawManifest struct {
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Description    string                 `json:"description"`
+	Channels       []string               `json:"channels"`
+	ChannelEnvVars map[string][]string    `json:"channelEnvVars"`
+	ConfigSchema   map[string]interface{} `json:"configSchema"`
+	UIHints        map[string]interface{} `json:"uiHints"`
+}
+
+var channelCatalogLabels = map[string]string{
+	"bluebubbles":     "BlueBubbles",
+	"discord":         "Discord",
+	"feishu":          "飞书 / Lark",
+	"googlechat":      "Google Chat",
+	"imessage":        "iMessage",
+	"irc":             "IRC",
+	"line":            "LINE",
+	"matrix":          "Matrix",
+	"mattermost":      "Mattermost",
+	"msteams":         "Microsoft Teams",
+	"nextcloud-talk":  "Nextcloud Talk",
+	"nostr":           "Nostr",
+	"qa-channel":      "QA Channel",
+	"qqbot":           "QQ 官方机器人",
+	"signal":          "Signal",
+	"slack":           "Slack",
+	"synology-chat":   "Synology Chat",
+	"telegram":        "Telegram",
+	"tlon":            "Tlon",
+	"twitch":          "Twitch",
+	"voice-call":      "Voice Call",
+	"whatsapp":        "WhatsApp",
+	"zalo":            "Zalo",
+	"zalouser":        "Zalo User",
+	"qq":              "QQ (NapCat)",
+	"dingtalk":        "钉钉",
+	"wecom":           "企业微信（智能机器人）",
+	"wecom-app":       "企业微信（自建应用）",
+	"openclaw-weixin": "微信（ClawBot）",
+}
+
+var channelCatalogDescriptions = map[string]string{
+	"voice-call":      "OpenClaw 内置语音呼叫通道，支持 Twilio / Telnyx / Plivo / mock。",
+	"zalouser":        "OpenClaw 内置 Zalo 用户侧通道。",
+	"qq":              "QQ 个人号，NapCat OneBot11 协议。",
+	"dingtalk":        "钉钉机器人通道（插件）。",
+	"wecom":           "企业微信智能机器人通道（插件）。",
+	"wecom-app":       "企业微信自建应用通道（插件）。",
+	"openclaw-weixin": "腾讯官方 WeChat ClawBot 插件。",
+}
+
+var manualPluginChannelCatalog = []openClawChannelCatalogItem{
+	{ID: "qq", Label: channelCatalogLabels["qq"], Description: channelCatalogDescriptions["qq"], Type: "plugin"},
+	{ID: "dingtalk", Label: channelCatalogLabels["dingtalk"], Description: channelCatalogDescriptions["dingtalk"], Type: "plugin"},
+	{ID: "wecom", Label: channelCatalogLabels["wecom"], Description: channelCatalogDescriptions["wecom"], Type: "plugin"},
+	{ID: "wecom-app", Label: channelCatalogLabels["wecom-app"], Description: channelCatalogDescriptions["wecom-app"], Type: "plugin"},
+	{ID: "openclaw-weixin", Label: channelCatalogLabels["openclaw-weixin"], Description: channelCatalogDescriptions["openclaw-weixin"], Type: "plugin"},
+}
 
 func normalizeProviderAPI(api string) string {
 	switch api {
@@ -230,6 +303,138 @@ func injectWecomVirtualChannel(cfg *config.Config, ocConfig map[string]interface
 	channels["wecom-app"] = virtual
 }
 
+func detectOpenClawPackageRoot() string {
+	bin, err := exec.LookPath("openclaw")
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		resolved = bin
+	}
+	if strings.HasSuffix(resolved, ".mjs") || strings.HasSuffix(resolved, ".js") {
+		return filepath.Dir(resolved)
+	}
+	return filepath.Dir(resolved)
+}
+
+func detectBundledExtensionsDir() string {
+	root := detectOpenClawPackageRoot()
+	if strings.TrimSpace(root) != "" {
+		candidate := filepath.Join(root, "dist", "extensions")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	for _, candidate := range []string{
+		"/usr/local/lib/node_modules/openclaw/dist/extensions",
+		"/usr/lib/node_modules/openclaw/dist/extensions",
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func readOpenClawManifestFile(dir string) (*openClawManifest, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "openclaw.plugin.json"))
+	if err != nil {
+		return nil, err
+	}
+	var manifest openClawManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(manifest.ID) == "" {
+		manifest.ID = filepath.Base(dir)
+	}
+	return &manifest, nil
+}
+
+func normalizeChannelCatalogItem(manifest *openClawManifest) openClawChannelCatalogItem {
+	id := strings.TrimSpace(manifest.ID)
+	label := channelCatalogLabels[id]
+	if label == "" {
+		if strings.TrimSpace(manifest.Name) != "" {
+			label = strings.TrimSpace(manifest.Name)
+		} else {
+			label = id
+		}
+	}
+	description := channelCatalogDescriptions[id]
+	if description == "" {
+		description = strings.TrimSpace(manifest.Description)
+	}
+	envVars := []string{}
+	if manifest.ChannelEnvVars != nil {
+		for _, vars := range manifest.ChannelEnvVars {
+			envVars = append(envVars, vars...)
+		}
+	}
+	return openClawChannelCatalogItem{
+		ID:           id,
+		Label:        label,
+		Description:  description,
+		Type:         "builtin",
+		Bundled:      true,
+		Channels:     append([]string{}, manifest.Channels...),
+		EnvVars:      envVars,
+		ConfigSchema: manifest.ConfigSchema,
+		UIHints:      manifest.UIHints,
+	}
+}
+
+func buildOpenClawChannelCatalog() []openClawChannelCatalogItem {
+	items := map[string]openClawChannelCatalogItem{}
+	extDir := detectBundledExtensionsDir()
+	if extDir != "" {
+		entries, _ := os.ReadDir(extDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			manifest, err := readOpenClawManifestFile(filepath.Join(extDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			if len(manifest.Channels) == 0 && manifest.ID != "voice-call" {
+				continue
+			}
+			item := normalizeChannelCatalogItem(manifest)
+			if item.ID == "talk-voice" {
+				item.ID = "voice-call"
+				item.Label = channelCatalogLabels["voice-call"]
+				item.Description = channelCatalogDescriptions["voice-call"]
+			}
+			items[item.ID] = item
+		}
+	}
+	for _, item := range manualPluginChannelCatalog {
+		items[item.ID] = item
+	}
+	list := make([]openClawChannelCatalogItem, 0, len(items))
+	for _, item := range items {
+		list = append(list, item)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Type != list[j].Type {
+			return list[i].Type < list[j].Type
+		}
+		return list[i].ID < list[j].ID
+	})
+	return list
+}
+
+func GetChannelCatalog() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":       true,
+			"channels": buildOpenClawChannelCatalog(),
+		})
+	}
+}
+
 // GetOpenClawConfig 获取 OpenClaw 配置
 func GetOpenClawConfig(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -418,11 +623,6 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 		id := c.Param("id")
 		if id == "qq" && !qqPluginInstalled(cfg) {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "QQ plugin is not installed; install QQ before configuring the channel"})
-			return
-		}
-
-		if id == "qqbot" && !qqbotPluginInstalled(cfg) {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "QQBot plugin is not installed; install QQBot before configuring the channel"})
 			return
 		}
 
@@ -1231,11 +1431,6 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 			return
 		}
 
-		if req.ChannelID == "qqbot" && !qqbotPluginInstalled(cfg) {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "QQBot plugin is not installed; install QQBot before enabling the channel"})
-			return
-		}
-
 		if req.ChannelID == "wecom" && !wecomBotPluginInstalled(cfg) {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "WeCom plugin is not installed; install WeCom before enabling the channel"})
 			return
@@ -1420,8 +1615,36 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 		}
 
 		channelNames := map[string]string{
-			"qq": "QQ (NapCat)", "wechat": "微信", "feishu": "飞书",
-			"qqbot": "QQ Bot", "dingtalk": "钉钉", "wecom": "企业微信", "openclaw-weixin": "微信（ClawBot）",
+			"qq":              "QQ (NapCat)",
+			"wechat":          "微信",
+			"feishu":          "飞书",
+			"qqbot":           "QQ 官方机器人",
+			"dingtalk":        "钉钉",
+			"wecom":           "企业微信",
+			"wecom-app":       "企业微信（自建应用）",
+			"openclaw-weixin": "微信（ClawBot）",
+			"telegram":        "Telegram",
+			"discord":         "Discord",
+			"slack":           "Slack",
+			"signal":          "Signal",
+			"googlechat":      "Google Chat",
+			"bluebubbles":     "BlueBubbles",
+			"imessage":        "iMessage",
+			"irc":             "IRC",
+			"line":            "LINE",
+			"matrix":          "Matrix",
+			"mattermost":      "Mattermost",
+			"msteams":         "Microsoft Teams",
+			"nextcloud-talk":  "Nextcloud Talk",
+			"nostr":           "Nostr",
+			"qa-channel":      "QA Channel",
+			"synology-chat":   "Synology Chat",
+			"tlon":            "Tlon",
+			"twitch":          "Twitch",
+			"voice-call":      "Voice Call",
+			"whatsapp":        "WhatsApp",
+			"zalo":            "Zalo",
+			"zalouser":        "Zalo User",
 		}
 		label := channelNames[req.ChannelID]
 		if label == "" {

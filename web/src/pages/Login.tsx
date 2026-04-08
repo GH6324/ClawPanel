@@ -4,6 +4,7 @@ import { useI18n } from '../i18n';
 
 export default function Login({ onLogin }: { onLogin: (pw: string) => Promise<boolean> }) {
   const { t } = useI18n();
+  const isDemo = import.meta.env.VITE_DEMO === 'true';
   const [pw, setPw] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
@@ -84,6 +85,11 @@ export default function Login({ onLogin }: { onLogin: (pw: string) => Promise<bo
                     />
                   </div>
                 </div>
+                {isDemo && (
+                  <p className="ml-1 text-xs font-medium text-blue-700 dark:text-blue-300">
+                    {t.login.demoPasswordHint}
+                  </p>
+                )}
               </div>
 
               {err && (

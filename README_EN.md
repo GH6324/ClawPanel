@@ -9,8 +9,8 @@
 Go Single Binary · React 18 · TailwindCSS · SQLite · WebSocket Real-time · Cross-platform
 
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-red?style=flat-square)](LICENSE)
-[![Pro](https://img.shields.io/badge/Pro-5.3.7-violet?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
-[![Lite](https://img.shields.io/badge/Lite-0.2.7-2563eb?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
+[![Pro](https://img.shields.io/badge/Pro-5.4.0-violet?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
+[![Lite](https://img.shields.io/badge/Lite-0.3.0-2563eb?style=flat-square)](https://github.com/zhaoxinyi02/ClawPanel/releases)
 [![Go](https://img.shields.io/badge/go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![CI](https://github.com/zhaoxinyi02/ClawPanel/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoxinyi02/ClawPanel/actions/workflows/ci.yml)
@@ -29,7 +29,7 @@ Go Single Binary · React 18 · TailwindCSS · SQLite · WebSocket Real-time · 
 > This project is for **learning and research purposes only**. **Commercial use is strictly prohibited.** Using third-party clients to log in to QQ/WeChat may violate Tencent's Terms of Service and **carries a risk of account suspension**. Please use test accounts. The author has **not performed any reverse engineering** and only integrates existing open-source projects. **No responsibility is assumed for any consequences.** By downloading and using this project, you agree to the [full disclaimer](DISCLAIMER.md).
 
 > [!NOTE]
-> **v5.3.7 / v0.2.7 Update** — this release adds panel-side integration for Tencent's official WeChat `openclaw-weixin` channel. Users can now open the channel page to generate a login QR code, poll scan status, refresh the QR code, inspect logged-in accounts, and log out an account from the panel. Tencent returns a login URL instead of a PNG, so the panel now re-renders that URL into a QR image locally to avoid browser loading failures. See [changelogs/v5.3.7.md](changelogs/v5.3.7.md) and [changelogs/lite-v0.2.7.md](changelogs/lite-v0.2.7.md)
+> **v5.4.0 / v0.3.0 Update** — this release aligns the panel with OpenClaw `2026.4.8`, adds the native OpenClaw task board, dashboard task-pressure summary, unified pairing approval UI, expanded built-in channel catalog with dynamic schema rendering, and a reorganized system-config experience. Lite now bundles OpenClaw runtime `2026.4.8`. See [changelogs/v5.4.0.md](changelogs/v5.4.0.md) and [changelogs/lite-v0.3.0.md](changelogs/lite-v0.3.0.md)
 
 > [!NOTE]
 > **v5.0.4 New** — 🔧 NapCat one-click diagnose & repair, system diagnostic report, QR login auto-detect & auto-close, disabled auto-login, container auto-restart after install, PATH detection fix. [View changelog](changelogs/v5.0.4.md)

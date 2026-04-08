@@ -231,6 +231,11 @@ func runServer(stopCh chan struct{}) {
 			auth.POST("/openclaw/route/preview", handler.PreviewOpenClawRoute(cfg))
 			auth.GET("/openclaw/models", handler.GetModels(cfg))
 			auth.PUT("/openclaw/models", handler.SaveModels(cfg))
+			auth.GET("/openclaw/channel-catalog", handler.GetChannelCatalog())
+			auth.GET("/openclaw/pairing", handler.GetOpenClawPairingRequests(cfg))
+			auth.POST("/openclaw/pairing/approve", handler.ApproveOpenClawPairingRequest(cfg))
+			auth.GET("/openclaw/tasks", handler.GetOpenClawTasks(cfg))
+			auth.GET("/openclaw/tasks/:id", handler.GetOpenClawTaskDetail(cfg))
 			auth.GET("/openclaw/channels", handler.GetChannels(cfg))
 			auth.PUT("/openclaw/channels/:id", handler.SaveChannel(cfg, procMgr))
 			auth.PUT("/openclaw/plugins/:id", handler.SavePlugin(cfg))
@@ -422,8 +427,8 @@ func runServer(stopCh chan struct{}) {
 			auth.GET("/software/list", handler.GetSoftwareList(cfg))
 			auth.GET("/software/openclaw-instances", handler.DetectOpenClawInstances(cfg))
 			auth.POST("/software/install", handler.InstallSoftware(cfg, taskMgr))
-			auth.GET("/tasks", handler.GetTasks(taskMgr))
-			auth.GET("/tasks/:id", handler.GetTaskDetail(taskMgr))
+			auth.GET("/panel/tasks", handler.GetPanelTasks(taskMgr))
+			auth.GET("/panel/tasks/:id", handler.GetPanelTaskDetail(taskMgr))
 
 			// WebSocket 实时日志
 			auth.GET("/ws/logs", wsHub.HandleWebSocket())

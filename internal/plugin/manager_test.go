@@ -42,7 +42,7 @@ func TestResolvePluginInstallStrategyUsesExplicitNpmSource(t *testing.T) {
 	}
 }
 
-func TestResolvePluginInstallStrategyUsesPreferredQQBotPackage(t *testing.T) {
+func TestResolvePluginInstallStrategyUsesDownloadWhenQQBotIsBundled(t *testing.T) {
 	t.Parallel()
 
 	strategy := resolvePluginInstallStrategy(&RegistryPlugin{
@@ -51,31 +51,17 @@ func TestResolvePluginInstallStrategyUsesPreferredQQBotPackage(t *testing.T) {
 		InstallSubDir: "official/qqbot",
 	}, "")
 
-	if strategy.kind != "npm" {
-		t.Fatalf("expected qqbot to use npm strategy, got %#v", strategy)
-	}
-	if strategy.target != "@sliverp/qqbot@latest" {
-		t.Fatalf("unexpected qqbot package spec: %q", strategy.target)
+	if strategy.kind != "download" {
+		t.Fatalf("expected bundled qqbot to avoid preferred npm fallback, got %#v", strategy)
 	}
 }
 
-func TestBuiltInOfficialChannelPluginProvidesQQBotFallback(t *testing.T) {
+func TestBuiltInOfficialChannelPluginSkipsQQBotFallback(t *testing.T) {
 	t.Parallel()
 
 	plugin := builtInOfficialChannelPlugin("qqbot")
-	if plugin == nil {
-		t.Fatal("expected qqbot fallback metadata")
-	}
-	if plugin.ID != "qqbot" {
-		t.Fatalf("unexpected plugin id: %q", plugin.ID)
-	}
-	if plugin.NpmPackage != "@sliverp/qqbot" {
-		t.Fatalf("unexpected qqbot npm package: %q", plugin.NpmPackage)
-	}
-
-	strategy := resolvePluginInstallStrategy(plugin, "")
-	if strategy.kind != "npm" || strategy.target != "@sliverp/qqbot@latest" {
-		t.Fatalf("expected qqbot fallback to use preferred npm spec, got %#v", strategy)
+	if plugin != nil {
+		t.Fatalf("expected no qqbot fallback metadata once qqbot is bundled, got %#v", plugin)
 	}
 }
 

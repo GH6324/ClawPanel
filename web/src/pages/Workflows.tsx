@@ -116,6 +116,36 @@ interface ModelOption {
   label: string;
 }
 
+interface ManualRunTarget {
+  channelId: string;
+  conversationId: string;
+  userId: string;
+  sourceMessage: string;
+}
+
+interface EnabledChannelOption {
+  id: string;
+  label: string;
+}
+
+interface OpenClawWeixinAccountOption {
+  accountId: string;
+  userId?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  name?: string;
+}
+
+interface RecentTargetOption {
+  key: string;
+  channelId: string;
+  conversationId: string;
+  userId: string;
+  label: string;
+  meta: string;
+  updatedAt?: number;
+}
+
 const DEFAULT_SETTINGS: WorkflowSettings = {
   enabled: false,
   providerId: '',
@@ -142,6 +172,13 @@ const DEFAULT_TEMPLATE_JSON = JSON.stringify(
   null,
   2,
 );
+
+const DEFAULT_MANUAL_RUN_TARGET: ManualRunTarget = {
+  channelId: '',
+  conversationId: '',
+  userId: '',
+  sourceMessage: '',
+};
 
 function extractModelOptions(payload: any): ModelOption[] {
   const providers = payload?.providers || payload?.models?.providers || {};
@@ -195,7 +232,12 @@ function channelLabel(value?: string) {
   if (value === 'qq') return 'QQ';
   if (value === 'wecom') return '企业微信';
   if (value === 'feishu') return '飞书';
+  if (value === 'openclaw-weixin') return '微信（ClawBot）';
   return value || '未知通道';
+}
+
+function isOpenClawWeixinChannel(value?: string) {
+  return value === 'openclaw-weixin';
 }
 
 function isTakeoverRun(run?: WorkflowRun | null) {
@@ -370,6 +412,12 @@ export default function Workflows() {
   const [runDetail, setRunDetail] = useState<WorkflowRun | null>(null);
   const [runEvents, setRunEvents] = useState<WorkflowEvent[]>([]);
   const [runInput, setRunInput] = useState('');
+  const [manualRunTarget, setManualRunTarget] = useState<ManualRunTarget>(DEFAULT_MANUAL_RUN_TARGET);
+  const [enabledChannels, setEnabledChannels] = useState<EnabledChannelOption[]>([]);
+  const [openClawWeixinAccounts, setOpenClawWeixinAccounts] = useState<OpenClawWeixinAccountOption[]>([]);
+  const [recentTargets, setRecentTargets] = useState<RecentTargetOption[]>([]);
+  const [selectedRecentTargetKey, setSelectedRecentTargetKey] = useState('');
+  const [showManualTargetFields, setShowManualTargetFields] = useState(false);
   const [runReply, setRunReply] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [previewState, setPreviewState] = useState<ArtifactPreviewState | null>(null);
@@ -382,6 +430,31 @@ export default function Workflows() {
 
   const takeoverRuns = useMemo(() => runs.filter(run => isTakeoverRun(run)), [runs]);
   const activeTakeovers = useMemo(() => takeoverRuns.filter(run => isTakeoverActive(run)), [takeoverRuns]);
+  const configuredWeixinAccounts = useMemo(
+    () => openClawWeixinAccounts.filter(item => item.enabled !== false && item.configured !== false),
+    [openClawWeixinAccounts],
+  );
+  const recentTargetsForSelectedChannel = useMemo(
+    () => recentTargets.filter(item => item.channelId === manualRunTarget.channelId),
+    [recentTargets, manualRunTarget.channelId],
+  );
+  const weixinTargetsForSelectedChannel = useMemo(
+    () => configuredWeixinAccounts.map(item => ({
+      key: `openclaw-weixin:${item.accountId}:${item.userId || ''}`,
+      channelId: 'openclaw-weixin',
+      conversationId: item.accountId,
+      userId: item.userId || '',
+      label: item.userId ? `微信用户 · ${item.userId}` : `微信账号 · ${item.accountId}`,
+      meta: item.name ? `${item.name} · ${item.accountId}` : item.accountId,
+    })),
+    [configuredWeixinAccounts],
+  );
+  const targetOptionsForSelectedChannel = useMemo(
+    () => (isOpenClawWeixinChannel(manualRunTarget.channelId) && weixinTargetsForSelectedChannel.length > 0
+      ? weixinTargetsForSelectedChannel
+      : recentTargetsForSelectedChannel),
+    [manualRunTarget.channelId, recentTargetsForSelectedChannel, weixinTargetsForSelectedChannel],
+  );
 
   useEffect(() => {
     void loadAll();
@@ -417,6 +490,19 @@ export default function Workflows() {
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [selectedRunId, runFilter]);
 
+  useEffect(() => {
+    if (!isOpenClawWeixinChannel(manualRunTarget.channelId)) return;
+    if (manualRunTarget.userId || manualRunTarget.conversationId) return;
+    if (configuredWeixinAccounts.length !== 1) return;
+    const only = configuredWeixinAccounts[0];
+    setManualRunTarget(prev => ({
+      ...prev,
+      conversationId: only.accountId,
+      userId: only.userId || '',
+    }));
+    setSelectedRecentTargetKey(`openclaw-weixin:${only.accountId}:${only.userId || ''}`);
+  }, [configuredWeixinAccounts, manualRunTarget.channelId, manualRunTarget.conversationId, manualRunTarget.userId]);
+
   const pushMessage = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(''), 2500);
@@ -425,11 +511,14 @@ export default function Workflows() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [settingsRes, templatesRes, runsRes, modelsRes] = await Promise.all([
+      const [settingsRes, templatesRes, runsRes, modelsRes, statusRes, allRunsRes, openClawWeixinRes] = await Promise.all([
         api.getWorkflowSettings(),
         api.getWorkflowTemplates(),
         api.getWorkflowRuns(runFilter || undefined),
         api.getModels(),
+        api.getStatus(),
+        api.getWorkflowRuns(),
+        api.getOpenClawWeixinStatus().catch(() => null),
       ]);
 
       if (settingsRes?.ok) {
@@ -444,6 +533,52 @@ export default function Workflows() {
         const nextRuns = runsRes.runs || [];
         setRuns(nextRuns);
         setSelectedRunId(prev => prev || nextRuns[0]?.id || '');
+      }
+      if (statusRes?.ok) {
+        const nextEnabledChannels = Array.isArray(statusRes.openclaw?.enabledChannels)
+          ? statusRes.openclaw.enabledChannels
+              .map((item: any) => ({
+                id: String(item?.id || '').trim(),
+                label: String(item?.label || channelLabel(String(item?.id || '').trim())).trim(),
+              }))
+              .filter((item: EnabledChannelOption) => item.id)
+          : [];
+        setEnabledChannels(nextEnabledChannels);
+      } else {
+        setEnabledChannels([]);
+      }
+      if (openClawWeixinRes?.ok && Array.isArray(openClawWeixinRes.accounts)) {
+        setOpenClawWeixinAccounts(openClawWeixinRes.accounts);
+      } else {
+        setOpenClawWeixinAccounts([]);
+      }
+      if (allRunsRes?.ok) {
+        const seen = new Set<string>();
+        const nextTargets: RecentTargetOption[] = [];
+        for (const item of allRunsRes.runs || []) {
+          const channelId = String(item?.channelId || '').trim();
+          const conversationId = String(item?.conversationId || '').trim();
+          const userId = String(item?.userId || '').trim();
+          if (!channelId || (!conversationId && !userId)) continue;
+          const key = `${channelId}__${conversationId}__${userId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const primary = conversationId || userId || '-';
+          const runName = String(item?.name || '').trim();
+          const shortId = String(item?.shortId || '').trim();
+          nextTargets.push({
+            key,
+            channelId,
+            conversationId,
+            userId,
+            label: `${channelLabel(channelId)} · ${primary}`,
+            meta: [runName, shortId].filter(Boolean).join(' · '),
+            updatedAt: Number(item?.updatedAt || 0),
+          });
+        }
+        setRecentTargets(nextTargets);
+      } else {
+        setRecentTargets([]);
       }
       if (modelsRes?.ok) {
         setModelOptions(extractModelOptions(modelsRes));
@@ -606,12 +741,22 @@ export default function Workflows() {
     }
     setBusyAction('start');
     try {
-      const response = await api.startWorkflowRun(templateId, { input: runInput });
+      const payload = {
+        input: runInput,
+        channelId: manualRunTarget.channelId.trim() || undefined,
+        conversationId: manualRunTarget.conversationId.trim() || undefined,
+        userId: manualRunTarget.userId.trim() || undefined,
+        sourceMessage: manualRunTarget.sourceMessage.trim() || undefined,
+      };
+      const response = await api.startWorkflowRun(templateId, payload);
       if (response?.ok && response.run?.id) {
         pushMessage('工作流已启动');
         await loadRuns();
         setSelectedRunId(response.run.id);
         setRunInput('');
+        setManualRunTarget(DEFAULT_MANUAL_RUN_TARGET);
+        setSelectedRecentTargetKey('');
+        setShowManualTargetFields(false);
       } else {
         pushMessage(response?.error || '启动工作流失败');
       }
@@ -998,6 +1143,126 @@ export default function Workflows() {
                       <h4 className="font-semibold">快速启动</h4>
                     </div>
                     <textarea value={runInput} onChange={e => setRunInput(e.target.value)} rows={5} className="page-modern-control w-full" placeholder="给当前模板补充一次运行输入，例如任务目标、上下文、交付要求。" />
+                    <div className="rounded-2xl border border-slate-200/70 px-4 py-4 dark:border-slate-800/70">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-white">启动上下文</div>
+                      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {isOpenClawWeixinChannel(manualRunTarget.channelId)
+                          ? '微信通道会优先使用当前已登录账号绑定的微信用户；只有多账号或特殊路由时才需要展开高级字段。'
+                          : '留空时仅在面板内运行；填写后会把当前实例绑定到指定通道 / 会话 / 用户，后续等待用户、进度回写、文件回传都会尝试回到这个目标。'}
+                      </p>
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label className="space-y-2 text-sm">
+                          <span>通道</span>
+                          <select
+                            value={manualRunTarget.channelId}
+                            onChange={e => {
+                              const nextChannelId = e.target.value;
+                              const onlyWeixinAccount = nextChannelId === 'openclaw-weixin' && configuredWeixinAccounts.length === 1
+                                ? configuredWeixinAccounts[0]
+                                : null;
+                              setManualRunTarget(prev => ({
+                                ...prev,
+                                channelId: nextChannelId,
+                                conversationId: onlyWeixinAccount?.accountId || '',
+                                userId: onlyWeixinAccount?.userId || '',
+                              }));
+                              setSelectedRecentTargetKey(onlyWeixinAccount ? `openclaw-weixin:${onlyWeixinAccount.accountId}:${onlyWeixinAccount.userId || ''}` : '');
+                              setShowManualTargetFields(false);
+                            }}
+                            className="page-modern-control w-full"
+                          >
+                            <option value="">仅面板内运行</option>
+                            {enabledChannels.map(option => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {manualRunTarget.channelId && (
+                          <label className="space-y-2 text-sm md:col-span-2">
+                            <span>{isOpenClawWeixinChannel(manualRunTarget.channelId) ? '微信用户目标' : '会话目标'}</span>
+                            {targetOptionsForSelectedChannel.length > 0 ? (
+                              <select
+                                value={selectedRecentTargetKey}
+                                onChange={e => {
+                                  const nextKey = e.target.value;
+                                  setSelectedRecentTargetKey(nextKey);
+                                  if (!nextKey) {
+                                    setManualRunTarget(prev => ({ ...prev, conversationId: '', userId: '' }));
+                                    return;
+                                  }
+                                  const selected = targetOptionsForSelectedChannel.find(item => item.key === nextKey);
+                                  if (selected) {
+                                    setManualRunTarget(prev => ({
+                                      ...prev,
+                                      conversationId: selected.conversationId,
+                                      userId: selected.userId,
+                                    }));
+                                  }
+                                }}
+                                className="page-modern-control w-full"
+                              >
+                                <option value="">{isOpenClawWeixinChannel(manualRunTarget.channelId) ? '选择当前已绑定的微信用户' : '选择最近使用过的会话目标'}</option>
+                                {targetOptionsForSelectedChannel.map(option => (
+                                  <option key={option.key} value={option.key}>
+                                    {option.meta ? `${option.label} · ${option.meta}` : option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="rounded-2xl bg-slate-50 px-3 py-3 text-xs text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                                {isOpenClawWeixinChannel(manualRunTarget.channelId)
+                                  ? '当前没有可用的微信账号目标。请先在通道管理里完成微信登录并让目标用户建立会话。'
+                                  : '当前这个通道还没有可复用的历史会话目标。'}
+                              </div>
+                            )}
+                          </label>
+                        )}
+                        {manualRunTarget.channelId && (
+                          <div className="md:col-span-2 flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-3 text-xs text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                            <span>{isOpenClawWeixinChannel(manualRunTarget.channelId) ? '默认直接选当前微信用户。只有多账号或排查问题时，才需要手动填写微信账号 / 用户 ID。' : '默认只显示可选目标。确实没有目标可选时，再手动填写底层 ID。'}</span>
+                            <button
+                              type="button"
+                              onClick={() => setShowManualTargetFields(prev => !prev)}
+                              className="page-modern-action px-3 py-1.5 text-[11px]"
+                            >
+                              {showManualTargetFields ? '收起手动填写' : '手动填写'}
+                            </button>
+                          </div>
+                        )}
+                        {showManualTargetFields && manualRunTarget.channelId && (
+                          <>
+                            <label className="space-y-2 text-sm">
+                              <span>{isOpenClawWeixinChannel(manualRunTarget.channelId) ? '微信用户 ID' : '用户 ID'}</span>
+                              <input
+                                value={manualRunTarget.userId}
+                                onChange={e => setManualRunTarget(prev => ({ ...prev, userId: e.target.value }))}
+                                className="page-modern-control w-full"
+                                placeholder={isOpenClawWeixinChannel(manualRunTarget.channelId) ? '例如 oxxxx@im.wechat' : '例如 QQ 私聊用户 ID、飞书 open_id'}
+                              />
+                            </label>
+                            <label className="space-y-2 text-sm md:col-span-2">
+                              <span>{isOpenClawWeixinChannel(manualRunTarget.channelId) ? '微信账号 ID（高级）' : '会话 ID'}</span>
+                              <input
+                                value={manualRunTarget.conversationId}
+                                onChange={e => setManualRunTarget(prev => ({ ...prev, conversationId: e.target.value }))}
+                                className="page-modern-control w-full"
+                                placeholder={isOpenClawWeixinChannel(manualRunTarget.channelId) ? '留空时默认使用唯一已登录账号；多账号时可填写 accountId' : '例如 qq:group:123456、qq:private:10001、飞书 chat_id、企微 responseUrl'}
+                              />
+                            </label>
+                          </>
+                        )}
+                        <label className="space-y-2 text-sm md:col-span-2">
+                          <span>来源消息</span>
+                          <textarea
+                            value={manualRunTarget.sourceMessage}
+                            onChange={e => setManualRunTarget(prev => ({ ...prev, sourceMessage: e.target.value }))}
+                            rows={3}
+                            className="page-modern-control w-full"
+                            placeholder="可选。用于记录这次启动对应的原始需求或要回写给原会话的来源消息。"
+                          />
+                        </label>
+                      </div>
+                    </div>
                     <button onClick={startRun} disabled={busyAction === 'start'} className="page-modern-accent w-full justify-center px-4 py-2 text-sm disabled:opacity-60 flex items-center gap-2">
                       {busyAction === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}启动当前模板
                     </button>

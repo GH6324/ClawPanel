@@ -18,12 +18,25 @@ type ChannelConfigField = {
   defaultValue?: string | number | boolean;
   section?: ChannelFieldSection;
   rows?: number;
+  valueFormat?: 'stringArray';
 };
 
 type ChannelDef = {
   id: string; label: string; description: string; type: 'builtin' | 'plugin';
   configFields: ChannelConfigField[];
   loginMethods?: ('qrcode' | 'quick' | 'password')[];
+};
+
+type ChannelCatalogItem = {
+  id: string;
+  label: string;
+  description: string;
+  type: 'builtin' | 'plugin';
+  bundled?: boolean;
+  channels?: string[];
+  envVars?: string[];
+  configSchema?: Record<string, any>;
+  uiHints?: Record<string, any>;
 };
 
 type FeishuDMDiagnosis = {
@@ -58,6 +71,33 @@ type FeishuAuthorizedSenderBucket = {
   senderIds?: string[];
   sourceFiles?: string[];
 };
+
+type OpenClawPairingRequest = {
+  id: string;
+  code: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  meta?: Record<string, string>;
+};
+
+const PAIRING_CAPABLE_CHANNELS = new Set([
+  'telegram',
+  'feishu',
+  'wecom',
+  'whatsapp',
+  'signal',
+  'discord',
+  'slack',
+  'line',
+  'matrix',
+  'zalo',
+  'zalouser',
+  'nextcloud-talk',
+  'synology-chat',
+  'googlechat',
+  'bluebubbles',
+  'imessage',
+]);
 
 function isPlainObject(value: any): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -306,7 +346,111 @@ const FEISHU_FIELD_SECTIONS: Record<Exclude<ChannelFieldSection, 'default'>, { t
   },
 };
 
-const CHANNEL_DEFS: ChannelDef[] = [
+function humanizeChannelFieldKey(raw: string): string {
+  const leaf = raw.split('.').pop() || raw;
+  return leaf
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function inferChannelFieldType(key: string, schema: Record<string, any>, uiHint: Record<string, any>): ChannelConfigField['type'] | '' {
+  const type = schema?.type;
+  if (type === 'boolean') return 'toggle';
+  if (type === 'integer' || type === 'number') return 'number';
+  if (Array.isArray(schema?.enum) && schema.enum.length > 0) return 'select';
+  if (type === 'array' && schema?.items?.type === 'string') return 'textarea';
+  if (type !== 'string') return '';
+  if (uiHint?.sensitive) return 'password';
+  if (/(token|secret|password|key)$/i.test(key)) return 'password';
+  if (/(prompt|instructions)$/i.test(key)) return 'textarea';
+  return 'text';
+}
+
+function buildDynamicChannelFields(
+  schema: Record<string, any> | undefined,
+  uiHints: Record<string, any> | undefined,
+  prefix = '',
+  depth = 0,
+): ChannelConfigField[] {
+  const properties = isPlainObject(schema?.properties) ? schema.properties : {};
+  const hints = isPlainObject(uiHints) ? uiHints : {};
+  const fields: ChannelConfigField[] = [];
+  for (const [propKey, rawPropSchema] of Object.entries(properties)) {
+    if (!isPlainObject(rawPropSchema)) continue;
+    if (!prefix && propKey === 'enabled') continue;
+    const fieldKey = prefix ? `${prefix}.${propKey}` : propKey;
+    const uiHint = isPlainObject(hints[fieldKey]) ? hints[fieldKey] : {};
+    const propType = String(rawPropSchema.type || '').trim();
+    if (propType === 'object') {
+      if (depth >= 1) continue;
+      if (!isPlainObject(rawPropSchema.properties) || Object.keys(rawPropSchema.properties).length === 0) continue;
+      fields.push(...buildDynamicChannelFields(rawPropSchema, uiHints, fieldKey, depth + 1));
+      continue;
+    }
+    const fieldType = inferChannelFieldType(fieldKey, rawPropSchema, uiHint);
+    if (!fieldType) continue;
+    const field: ChannelConfigField = {
+      key: fieldKey,
+      label: String(uiHint.label || humanizeChannelFieldKey(fieldKey)),
+      type: fieldType,
+      section: uiHint.advanced ? 'advanced' : 'default',
+    };
+    if (Array.isArray(rawPropSchema.enum) && rawPropSchema.enum.length > 0) {
+      field.options = rawPropSchema.enum.map((item: any) => String(item));
+    }
+    if (uiHint.placeholder) field.placeholder = String(uiHint.placeholder);
+    if (uiHint.help) field.help = String(uiHint.help);
+    if (rawPropSchema.default !== undefined) field.defaultValue = rawPropSchema.default;
+    if (fieldType === 'textarea') {
+      field.rows = /prompt|instructions/i.test(fieldKey) ? 4 : 3;
+      if (propType === 'array' && rawPropSchema?.items?.type === 'string') {
+        field.valueFormat = 'stringArray';
+        if (!field.help) field.help = '支持英文逗号、中文逗号或换行分隔';
+      }
+    }
+    fields.push(field);
+  }
+  return fields;
+}
+
+function mergeChannelDefs(defaultDefs: ChannelDef[], catalogItems: ChannelCatalogItem[]): ChannelDef[] {
+  const merged = new Map<string, ChannelDef>();
+  defaultDefs.forEach(def => {
+    merged.set(def.id, {
+      ...def,
+      configFields: def.configFields.map(field => ({ ...field })),
+      loginMethods: def.loginMethods ? [...def.loginMethods] : undefined,
+    });
+  });
+  catalogItems.forEach(item => {
+    const dynamicFields = buildDynamicChannelFields(item.configSchema, item.uiHints);
+    const existing = merged.get(item.id);
+    if (existing) {
+      const seen = new Set(existing.configFields.map(field => field.key));
+      dynamicFields.forEach(field => {
+        if (!seen.has(field.key)) existing.configFields.push(field);
+      });
+      existing.label = existing.label || item.label || item.id;
+      existing.description = existing.description || item.description || '';
+      existing.type = existing.type || item.type;
+      return;
+    }
+    merged.set(item.id, {
+      id: item.id,
+      label: item.label || item.id,
+      description: item.description || '',
+      type: item.type,
+      configFields: dynamicFields,
+      loginMethods: item.id === 'openclaw-weixin' ? ['qrcode'] : undefined,
+    });
+  });
+  return Array.from(merged.values());
+}
+
+const DEFAULT_CHANNEL_DEFS: ChannelDef[] = [
   { id: 'qq', label: 'QQ (NapCat)', description: 'QQ个人号，NapCat OneBot11协议', type: 'plugin',
     loginMethods: ['qrcode', 'quick', 'password'],
     configFields: [
@@ -330,7 +474,13 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'welcome.template', label: '欢迎模板', type: 'text', placeholder: '欢迎 {nickname} 加入本群！' },
     ] },
   { id: 'whatsapp', label: 'WhatsApp', description: 'Baileys QR扫码配对', type: 'builtin', loginMethods: ['qrcode'],
-    configFields: [{ key: 'dmPolicy', label: 'DM策略', type: 'select', options: ['pairing','open','allowlist'] }] },
+    configFields: [
+      { key: 'dmPolicy', label: 'DM策略', type: 'select', options: ['pairing','open','allowlist'] },
+      { key: 'reactionLevel', label: 'Reaction Level', type: 'select', options: ['off', 'ack', 'minimal', 'extensive'], help: '控制 WhatsApp 预确认和 agent 主动 reaction 的等级。' },
+      { key: 'ackReaction.emoji', label: 'Ack Reaction Emoji', type: 'text', placeholder: '👀', help: '收到消息后立刻发送的预确认 emoji。' },
+      { key: 'ackReaction.direct', label: '私聊 Ack Reaction', type: 'toggle', help: '是否在私聊中发送 ack reaction。' },
+      { key: 'ackReaction.group', label: '群聊 Ack Reaction', type: 'select', options: ['always', 'mentions', 'never'], help: '群聊里何时发送 ack reaction。' },
+    ] },
   { id: 'telegram', label: 'Telegram', description: 'Telegram Bot 内置通道', type: 'builtin',
     configFields: [
       { key: 'botToken', label: 'Bot Token', type: 'password', placeholder: '123456:ABC-DEF...', help: '从 @BotFather 获取的 Telegram Bot Token' },
@@ -338,6 +488,9 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'allowFrom', label: '私聊白名单', type: 'textarea', rows: 3, placeholder: '123456789, 987654321', help: '仅 dmPolicy=allowlist 时生效；支持英文逗号、中文逗号或换行分隔' },
       { key: 'groupPolicy', label: '群聊准入策略', type: 'select', options: ['allowlist', 'open'], help: 'allowlist = 仅允许白名单中的发送者；open = 群内任何人都可触发（通常仍需提及）', defaultValue: 'allowlist' },
       { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', rows: 3, placeholder: '123456789, 987654321', help: '仅 groupPolicy=allowlist 时生效；支持英文逗号、中文逗号或换行分隔' },
+      { key: 'reactionNotifications', label: 'Reaction Notifications', type: 'select', options: ['off', 'own', 'all'], help: '控制哪些 Telegram reaction 会转成系统事件。' },
+      { key: 'reactionLevel', label: 'Reaction Level', type: 'select', options: ['off', 'ack', 'minimal', 'extensive'], help: '控制 agent 在 Telegram 里使用 reaction 的范围。' },
+      { key: 'ackReaction', label: 'Ack Reaction Emoji', type: 'text', placeholder: '👀', help: '处理消息时先发送的确认 emoji；留空可禁用。' },
     ] },
   { id: 'discord', label: 'Discord', description: 'Discord Bot API + Gateway', type: 'builtin',
     configFields: [
@@ -360,6 +513,29 @@ const CHANNEL_DEFS: ChannelDef[] = [
     configFields: [
       { key: 'apiUrl', label: 'REST API URL', type: 'text', placeholder: 'http://signal-cli:8080' },
       { key: 'phoneNumber', label: '手机号', type: 'text' },
+      { key: 'reactionNotifications', label: 'Reaction Notifications', type: 'select', options: ['off', 'own', 'all', 'allowlist'], help: '控制哪些 Signal reaction 会变成系统事件。' },
+      { key: 'reactionLevel', label: 'Reaction Level', type: 'select', options: ['off', 'ack', 'minimal', 'extensive'], help: '控制 Signal 的 ack / agent reaction 能力。' },
+    ] },
+  { id: 'feishu', label: '飞书 / Lark', description: 'OpenClaw 内置飞书通道（2026.4.x 起）', type: 'builtin',
+    configFields: [
+      { key: 'appId', label: 'App ID', type: 'text', help: '飞书 / Lark 应用 App ID', section: 'access' },
+      { key: 'appSecret', label: 'App Secret', type: 'password', help: '飞书 / Lark 应用 App Secret', section: 'access' },
+      { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu', defaultValue: 'feishu', section: 'access' },
+      { key: 'requireMention', label: '群聊是否必须 @', type: 'select', options: ['true', 'false'], help: '仅接受 true / false；open 属于 groupPolicy，不属于本字段', defaultValue: true, section: 'access' },
+      { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊', defaultValue: 'open', section: 'access' },
+      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单', defaultValue: 'open', section: 'access' },
+      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', placeholder: 'oc_xxx, oc_yyy', help: '支持英文逗号、中文逗号或换行分隔；仅 groupPolicy=allowlist 时生效，保存时会写成数组', section: 'access', rows: 3 },
+      { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '开启后回复以流式卡片形式呈现', section: 'conversation' },
+      { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '每个话题拥有独立会话并可并行', section: 'conversation' },
+      { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', section: 'conversation' },
+      { key: 'footer.status', label: '显示状态页脚', type: 'toggle', section: 'conversation' },
+      { key: 'replyInThread', label: '话题内回复', type: 'toggle', help: '优先在话题内回复', section: 'conversation' },
+      { key: 'typingIndicator', label: '输入中提示', type: 'toggle', section: 'conversation' },
+      { key: 'resolveSenderNames', label: '解析发送者名称', type: 'toggle', section: 'conversation' },
+      { key: 'dynamicAgentCreation', label: '动态创建 Agent', type: 'toggle', section: 'conversation' },
+      { key: 'connectionMode', label: '连接模式', type: 'text', placeholder: 'websocket', defaultValue: 'websocket', section: 'advanced' },
+      { key: 'historyLimit', label: '历史消息回放上限', type: 'number', placeholder: '300', defaultValue: 300, section: 'advanced' },
+      { key: 'mediaMaxMb', label: '媒体大小上限（MB）', type: 'number', placeholder: '5', defaultValue: 5, section: 'advanced' },
     ] },
   { id: 'googlechat', label: 'Google Chat', description: 'Google Chat API Webhook', type: 'builtin',
     configFields: [
@@ -371,32 +547,46 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'serverUrl', label: '服务器URL', type: 'text' },
       { key: 'password', label: '密码', type: 'password' },
     ] },
-  { id: 'webchat', label: 'WebChat', description: 'Gateway WebChat UI (内置)', type: 'builtin', configFields: [] },
-  // Plugin channels
-  { id: 'feishu', label: '飞书 / Lark', description: '飞书机器人 WebSocket (插件)', type: 'plugin',
+  { id: 'imessage', label: 'iMessage', description: 'OpenClaw 内置 iMessage 通道（通常依赖 macOS 主机环境）', type: 'builtin', configFields: [] },
+  { id: 'line', label: 'LINE', description: 'LINE Messaging API（内置）', type: 'builtin',
     configFields: [
-      { key: 'domain', label: '站点域（Domain）', type: 'select', options: ['feishu', 'lark'], help: '国际版 Lark 场景可切到 lark；不确定时保持 feishu', defaultValue: 'feishu', section: 'access' },
-      { key: 'requireMention', label: '群聊是否必须 @', type: 'select', options: ['true', 'false'], help: '仅接受 true / false；open 属于 groupPolicy，不属于本字段', defaultValue: true, section: 'access' },
-      { key: 'groupPolicy', label: '群组准入策略', type: 'select', options: ['open', 'allowlist', 'closed'], help: 'open = 所有群可用；allowlist = 仅白名单；closed = 禁止群聊', defaultValue: 'open', section: 'access' },
-      { key: 'dmPolicy', label: '私聊准入策略', type: 'select', options: ['pairing', 'open', 'allowlist'], help: 'pairing = 需先配对；open = 所有私聊可用；allowlist = 仅白名单', defaultValue: 'open', section: 'access' },
-      { key: 'groupAllowFrom', label: '群聊白名单', type: 'textarea', placeholder: 'oc_xxx, oc_yyy', help: '支持英文逗号、中文逗号或换行分隔；仅 groupPolicy=allowlist 时生效，保存时会写成数组', section: 'access', rows: 3 },
-      { key: 'streaming', label: '流式卡片输出', type: 'toggle', help: '仅飞书官方版支持，开启后回复以流式卡片形式呈现', section: 'conversation' },
-      { key: 'threadSession', label: '话题独立上下文', type: 'toggle', help: '仅飞书官方版支持，每个话题拥有独立会话并可并行', section: 'conversation' },
-      { key: 'footer.elapsed', label: '显示耗时页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略', section: 'conversation' },
-      { key: 'footer.status', label: '显示状态页脚', type: 'toggle', help: '飞书官方文档已明确给出配置命令；其他版本若不识别会直接忽略', section: 'conversation' },
-      { key: 'replyInThread', label: '话题内回复', type: 'toggle', help: '仅 ClawTeam 版支持，优先在话题内回复', section: 'conversation' },
-      { key: 'typingIndicator', label: '输入中提示', type: 'toggle', help: '仅 ClawTeam 版支持', section: 'conversation' },
-      { key: 'resolveSenderNames', label: '解析发送者名称', type: 'toggle', help: '仅 ClawTeam 版支持，自动解析飞书用户显示名', section: 'conversation' },
-      { key: 'dynamicAgentCreation', label: '动态创建 Agent', type: 'toggle', help: '仅 ClawTeam 版支持，按场景动态创建 Agent', section: 'conversation' },
-      { key: 'connectionMode', label: '连接模式', type: 'text', placeholder: 'websocket', help: 'ClawTeam 版现有配置基线常见为 websocket；官方版若未使用该字段可留空', defaultValue: 'websocket', section: 'advanced' },
-      { key: 'historyLimit', label: '历史消息回放上限', type: 'number', placeholder: '300', help: 'gap analysis 中常见默认值为 300；留空表示交给插件默认', defaultValue: 300, section: 'advanced' },
-      { key: 'mediaMaxMb', label: '媒体大小上限（MB）', type: 'number', placeholder: '5', help: 'gap analysis 中常见默认值为 5；留空表示交给插件默认', defaultValue: 5, section: 'advanced' },
+      { key: 'channelAccessToken', label: 'Channel Access Token', type: 'password' },
+      { key: 'channelSecret', label: 'Channel Secret', type: 'password' },
     ] },
-  { id: 'qqbot', label: 'QQ 官方机器人', description: 'QQ开放平台官方Bot API (插件)', type: 'plugin',
+  { id: 'matrix', label: 'Matrix', description: 'Matrix 协议（内置）', type: 'builtin',
     configFields: [
-      { key: 'appId', label: 'App ID', type: 'text', help: 'QQ 开放平台应用 ID（新版插件只需填写 appId 和 appSecret）' },
+      { key: 'homeserverUrl', label: 'Homeserver URL', type: 'text' },
+      { key: 'accessToken', label: 'Access Token', type: 'password' },
+    ] },
+  { id: 'mattermost', label: 'Mattermost', description: 'Mattermost Bot API + WebSocket（内置）', type: 'builtin',
+    configFields: [
+      { key: 'url', label: '服务器URL', type: 'text' },
+      { key: 'token', label: 'Bot Token', type: 'password' },
+    ] },
+  { id: 'msteams', label: 'Microsoft Teams', description: 'Bot Framework（内置）', type: 'builtin',
+    configFields: [
+      { key: 'appId', label: 'App ID', type: 'text' },
+      { key: 'appPassword', label: 'App Password', type: 'password' },
+    ] },
+  { id: 'nextcloud-talk', label: 'Nextcloud Talk', description: 'OpenClaw 内置 Nextcloud Talk 通道', type: 'builtin', configFields: [] },
+  { id: 'nostr', label: 'Nostr', description: 'OpenClaw 内置 Nostr 通道', type: 'builtin', configFields: [] },
+  { id: 'qa-channel', label: 'QA Channel', description: 'OpenClaw 内置 QA 调试通道', type: 'builtin', configFields: [] },
+  { id: 'qqbot', label: 'QQ 官方机器人', description: 'QQ 开放平台官方 Bot API（内置）', type: 'builtin',
+    configFields: [
+      { key: 'appId', label: 'App ID', type: 'text', help: 'QQ 开放平台应用 ID（新版内置通道只需填写 appId 和 appSecret）' },
       { key: 'clientSecret', label: 'App Secret', type: 'password', help: 'QQ 官方机器人 App Secret' },
     ] },
+  { id: 'synology-chat', label: 'Synology Chat', description: 'OpenClaw 内置 Synology Chat 通道', type: 'builtin', configFields: [] },
+  { id: 'tlon', label: 'Tlon', description: 'OpenClaw 内置 Tlon 通道', type: 'builtin', configFields: [] },
+  { id: 'twitch', label: 'Twitch', description: 'Twitch Chat via IRC（内置）', type: 'builtin',
+    configFields: [
+      { key: 'username', label: '用户名', type: 'text' },
+      { key: 'oauthToken', label: 'OAuth Token', type: 'password' },
+      { key: 'channels', label: '频道', type: 'text', help: '逗号分隔' },
+    ] },
+  { id: 'zalo', label: 'Zalo', description: 'OpenClaw 内置 Zalo 通道', type: 'builtin', configFields: [] },
+  { id: 'webchat', label: 'WebChat', description: 'Gateway WebChat UI (内置)', type: 'builtin', configFields: [] },
+  // Plugin channels
   { id: 'dingtalk', label: '钉钉', description: '钉钉机器人 (插件)', type: 'plugin',
     configFields: [
       { key: 'clientId', label: 'Client ID', type: 'text', help: '钉钉应用 Client ID' },
@@ -425,32 +615,6 @@ const CHANNEL_DEFS: ChannelDef[] = [
       { key: 'baseUrl', label: 'Base URL', type: 'text', placeholder: 'https://ilinkai.weixin.qq.com', help: '默认可保持官方地址，仅在腾讯侧给出其他入口时调整。' },
       { key: 'cdnBaseUrl', label: 'CDN Base URL', type: 'text', placeholder: 'https://novac2c.cdn.weixin.qq.com/c2c', help: '媒体上传/下载 CDN 地址；通常保持默认即可。' },
       { key: 'routeTag', label: 'Route Tag', type: 'number', help: '可选。多入口或灰度路由场景下才需要。' },
-    ] },
-  { id: 'msteams', label: 'Microsoft Teams', description: 'Bot Framework (插件)', type: 'plugin',
-    configFields: [
-      { key: 'appId', label: 'App ID', type: 'text' },
-      { key: 'appPassword', label: 'App Password', type: 'password' },
-    ] },
-  { id: 'mattermost', label: 'Mattermost', description: 'Bot API + WebSocket (插件)', type: 'plugin',
-    configFields: [
-      { key: 'url', label: '服务器URL', type: 'text' },
-      { key: 'token', label: 'Bot Token', type: 'password' },
-    ] },
-  { id: 'line', label: 'LINE', description: 'LINE Messaging API (插件)', type: 'plugin',
-    configFields: [
-      { key: 'channelAccessToken', label: 'Channel Access Token', type: 'password' },
-      { key: 'channelSecret', label: 'Channel Secret', type: 'password' },
-    ] },
-  { id: 'matrix', label: 'Matrix', description: 'Matrix 协议 (插件)', type: 'plugin',
-    configFields: [
-      { key: 'homeserverUrl', label: 'Homeserver URL', type: 'text' },
-      { key: 'accessToken', label: 'Access Token', type: 'password' },
-    ] },
-  { id: 'twitch', label: 'Twitch', description: 'Twitch Chat via IRC (插件)', type: 'plugin',
-    configFields: [
-      { key: 'username', label: '用户名', type: 'text' },
-      { key: 'oauthToken', label: 'OAuth Token', type: 'password' },
-      { key: 'channels', label: '频道', type: 'text', help: '逗号分隔' },
     ] },
 ];
 
@@ -496,9 +660,10 @@ function getWecomConnectionMode(cfg: any): 'callback' | 'long-polling' {
 
 // 飞书版本：读取当前启用的变体
 function getActiveFeishuVariant(ocConfig: any): 'official' | 'clawteam' | null {
+  if (isPlainObject(ocConfig?.channels?.feishu)) return 'official';
   const entries = ocConfig?.plugins?.entries || {};
   if (getEnabledPluginEntry(entries, FEISHU_OFFICIAL_IDS)) return 'official';
-  if (entries['feishu']?.enabled) return 'clawteam';
+  if (entries['feishu']?.enabled) return 'official';
   return null;
 }
 
@@ -623,6 +788,7 @@ export default function Channels() {
   };
 
   const [status, setStatus] = useState<any>(null);
+  const [channelDefs, setChannelDefs] = useState<ChannelDef[]>(DEFAULT_CHANNEL_DEFS);
   const [selectedChannel, setSelectedChannel] = useState('');
   const [ocConfig, setOcConfig] = useState<any>({});
   const [saving, setSaving] = useState(false);
@@ -655,6 +821,9 @@ export default function Channels() {
   const [openClawWeixinSessionKey, setOpenClawWeixinSessionKey] = useState('');
   const [loggingOutWeixinAccount, setLoggingOutWeixinAccount] = useState<string | null>(null);
   const [qqChannelState, setQQChannelState] = useState<any>(null);
+  const [pairingRequests, setPairingRequests] = useState<OpenClawPairingRequest[]>([]);
+  const [loadingPairingRequests, setLoadingPairingRequests] = useState(false);
+  const [approvingPairingCode, setApprovingPairingCode] = useState('');
   const [channelDrafts, setChannelDrafts] = useState<Record<string, any>>({});
   const [channelFieldTextDrafts, setChannelFieldTextDrafts] = useState<Record<string, string>>({});
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
@@ -670,7 +839,7 @@ export default function Channels() {
     if (!value) return '';
     const normalized = value.trim().toLowerCase();
     if (normalized === 'napcat') return 'qq';
-    return CHANNEL_DEFS.some(channel => channel.id === normalized) ? normalized : '';
+    return channelDefs.some(channel => channel.id === normalized) ? normalized : '';
   };
 
   const syncFeishuUiState = useCallback((config: any) => {
@@ -804,6 +973,16 @@ export default function Channels() {
     api.getOpenClawWeixinStatus().then((r: any) => { if (r.ok) setOpenClawWeixinStatus(r); }).catch(() => {});
   };
 
+  const loadChannelCatalog = useCallback(() => {
+    api.getChannelCatalog()
+      .then((r: any) => {
+        if (!r.ok) return;
+        const items = Array.isArray(r.channels) ? (r.channels as ChannelCatalogItem[]) : [];
+        setChannelDefs(mergeChannelDefs(DEFAULT_CHANNEL_DEFS, items));
+      })
+      .catch(() => {});
+  }, []);
+
   const loadFeishuDmDiagnosis = useCallback(async () => {
     setLoadingFeishuDmDiagnosis(true);
     try {
@@ -864,9 +1043,9 @@ export default function Channels() {
         const value = key.split('.').reduce((obj: any, part: string) => obj?.[part], cfg);
         return !String(value ?? '').trim();
       })
-      .map(key => CHANNEL_DEFS.find(ch => ch.id === channelId)?.configFields.find(field => field.key === key)?.label || key);
+      .map(key => channelDefs.find(ch => ch.id === channelId)?.configFields.find(field => field.key === key)?.label || key);
     if (missingLabels.length) {
-      const channelLabel = CHANNEL_DEFS.find(ch => ch.id === channelId)?.label || channelId;
+      const channelLabel = channelDefs.find(ch => ch.id === channelId)?.label || channelId;
       if (channelId === 'dingtalk') {
         return '钉钉需要先填写 Client ID 和 Client Secret 才能启用';
       }
@@ -876,6 +1055,7 @@ export default function Channels() {
   };
 
   const reload = () => {
+    loadChannelCatalog();
     api.getStatus().then(r => { if (r.ok) setStatus(r); });
     api.getOpenClawConfig().then(r => {
       if (!r.ok) return;
@@ -894,6 +1074,11 @@ export default function Channels() {
     // Batch all initial loads in parallel for faster page load
     Promise.all([
       api.getStatus().then(r => { if (r.ok) setStatus(r); }).catch(() => {}),
+      api.getChannelCatalog().then((r: any) => {
+        if (!r.ok) return;
+        const items = Array.isArray(r.channels) ? (r.channels as ChannelCatalogItem[]) : [];
+        setChannelDefs(mergeChannelDefs(DEFAULT_CHANNEL_DEFS, items));
+      }).catch(() => {}),
       api.getOpenClawConfig().then(r => {
         if (!r.ok) return;
         const nextConfig = r.config || {};
@@ -914,7 +1099,7 @@ export default function Channels() {
   // 自动选择第一个已启用的渠道（而非硬编码 QQ）
   useEffect(() => {
     if (selectedChannel) return; // 用户已手动选择
-    const firstEnabled = CHANNEL_DEFS.find(ch => {
+    const firstEnabled = channelDefs.find(ch => {
       const chConf = ocConfig?.channels?.[ch.id] || {};
       const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
       if (ch.id === 'feishu') {
@@ -925,8 +1110,8 @@ export default function Channels() {
       return chConf.enabled || pluginConf.enabled;
     });
     if (firstEnabled) setSelectedChannel(firstEnabled.id);
-    else setSelectedChannel('feishu');
-  }, [ocConfig, selectedChannel]);
+    else setSelectedChannel(channelDefs.some(ch => ch.id === 'feishu') ? 'feishu' : (channelDefs[0]?.id || ''));
+  }, [channelDefs, ocConfig, selectedChannel]);
   useEffect(() => {
     if (selectedChannel === 'feishu') syncFeishuUiState(ocConfig);
   }, [selectedChannel, syncFeishuUiState]);
@@ -934,12 +1119,12 @@ export default function Channels() {
     const queryChannel = normalizeChannelQuery(searchParams.get('channel'));
     if (!queryChannel) return;
     setSelectedChannel(prev => prev === queryChannel ? prev : queryChannel);
-  }, [searchParams]);
+  }, [channelDefs, searchParams]);
   // 自动选择第一个已启用的渠道（而非硬编码 QQ）
   useEffect(() => {
     const queryChannel = normalizeChannelQuery(searchParams.get('channel'));
     if (queryChannel || selectedChannel) return;
-    const firstEnabled = CHANNEL_DEFS.find(ch => {
+    const firstEnabled = channelDefs.find(ch => {
       const chConf = ocConfig?.channels?.[ch.id] || {};
       const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
       if (ch.id === 'feishu') {
@@ -950,8 +1135,8 @@ export default function Channels() {
       return chConf.enabled || pluginConf.enabled;
     });
     if (firstEnabled) setSelectedChannel(firstEnabled.id);
-    else setSelectedChannel('feishu');
-  }, [ocConfig, selectedChannel]);
+    else setSelectedChannel(channelDefs.some(ch => ch.id === 'feishu') ? 'feishu' : (channelDefs[0]?.id || ''));
+  }, [channelDefs, ocConfig, selectedChannel]);
   useEffect(() => {
     const timer = setInterval(loadNapcatStatus, 30000);
     return () => clearInterval(timer);
@@ -1172,6 +1357,7 @@ export default function Channels() {
   // Get the merged config for the current channel (supports nested keys like notifications.antiRecall)
   const getFieldValue = (channelId: string, key: string) => {
     const chConf = getEffectiveChannelConfig(channelId);
+    const fieldDef = channelDefs.find(ch => ch.id === channelId)?.configFields.find(field => field.key === key);
     if (channelId === 'qq') {
       if (key === 'rateLimit.wakeProbability') {
         const nested = chConf?.rateLimit?.wakeProbability;
@@ -1192,6 +1378,9 @@ export default function Channels() {
     }
     if (channelId === 'feishu' && key === 'groupAllowFrom') {
       return formatCommaList(chConf?.groupAllowFrom);
+    }
+    if (fieldDef?.valueFormat === 'stringArray') {
+      return formatCommaList(key.split('.').reduce((o: any, k: string) => o?.[k], chConf));
     }
     return key.split('.').reduce((o: any, k: string) => o?.[k], chConf);
   };
@@ -1235,6 +1424,11 @@ export default function Channels() {
         return;
       }
 
+      if (field.valueFormat === 'stringArray') {
+        setNestedValue(draft, field.key, parseDelimitedList(rawValue));
+        return;
+      }
+
       setNestedValue(draft, field.key, rawValue);
     });
   };
@@ -1248,10 +1442,50 @@ export default function Channels() {
     return ocChannels[channelId]?.enabled || ocPlugins[channelId]?.enabled || false;
   };
 
-  const currentDef = CHANNEL_DEFS.find(c => c.id === selectedChannel);
+  const currentDef = channelDefs.find(c => c.id === selectedChannel);
   const currentLoginChannelId = loginChannelId || currentDef?.id || '';
-  const currentLoginChannel = CHANNEL_DEFS.find(channel => channel.id === currentLoginChannelId) || currentDef;
+  const currentLoginChannel = channelDefs.find(channel => channel.id === currentLoginChannelId) || currentDef;
   const openClawWeixinAccounts = Array.isArray(openClawWeixinStatus?.accounts) ? openClawWeixinStatus.accounts : [];
+  const currentChannelSupportsPairing = !!currentDef && currentDef.id !== 'openclaw-weixin' && (
+    PAIRING_CAPABLE_CHANNELS.has(currentDef.id) ||
+    currentDef.configFields.some(field => field.key === 'dmPolicy')
+  );
+  const currentChannelPairingEnabled = !!currentDef && currentChannelSupportsPairing && String(getEffectiveChannelConfig(currentDef.id)?.dmPolicy || '').trim() === 'pairing';
+
+  const resolvePairingAccountId = useCallback((channelId: string) => {
+    const cfg = getEffectiveChannelConfig(channelId);
+    if (channelId === 'feishu') {
+      return feishuAdvancedAccounts ? pickFeishuDefaultAccount(cfg) : pickFeishuDefaultAccount(cfg);
+    }
+    return String(cfg?.defaultAccount || '').trim();
+  }, [feishuAdvancedAccounts, channelDrafts, ocConfig]);
+
+  const loadPairingRequests = useCallback(async (channelId: string, accountId?: string) => {
+    if (!channelId) {
+      setPairingRequests([]);
+      return;
+    }
+    setLoadingPairingRequests(true);
+    try {
+      const r = await api.getOpenClawPairingRequests(channelId, accountId);
+      if (r?.ok) {
+        setPairingRequests(Array.isArray(r.requests) ? r.requests : []);
+      } else {
+        setPairingRequests([]);
+      }
+    } catch {
+      setPairingRequests([]);
+    } finally {
+      setLoadingPairingRequests(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!currentDef || !currentChannelPairingEnabled) {
+      setPairingRequests([]);
+      return;
+    }
+    loadPairingRequests(currentDef.id, resolvePairingAccountId(currentDef.id) || undefined);
+  }, [currentDef, currentChannelPairingEnabled, loadPairingRequests, resolvePairingAccountId]);
 
   const syncSelectedChannel = (channelId: string) => {
     setSelectedChannel(channelId);
@@ -1658,13 +1892,30 @@ export default function Channels() {
     await api.rejectRequest(flag);
     setRequests(prev => prev.filter(r => r.flag !== flag));
   };
+  const handleApprovePairingCode = async (channelId: string, code: string, accountId?: string) => {
+    setApprovingPairingCode(code);
+    try {
+      const r = await api.approveOpenClawPairingRequest({ channelId, code, accountId });
+      if (r?.ok) {
+        setMsg(`已批准 ${channelDefs.find(ch => ch.id === channelId)?.label || channelId} 配对请求 ${code}`);
+        await loadPairingRequests(channelId, accountId);
+      } else {
+        setMsg(r?.error || '批准 pairing code 失败');
+      }
+    } catch (err) {
+      setMsg('批准 pairing code 失败: ' + String(err));
+    } finally {
+      setApprovingPairingCode('');
+      setTimeout(() => setMsg(''), 5000);
+    }
+  };
 
   // Sort channels: enabled first, then configured, then unconfigured
-  const sortedBuiltin = CHANNEL_DEFS.filter(c => c.type === 'builtin').sort((a, b) => {
+  const sortedBuiltin = channelDefs.filter(c => c.type === 'builtin').sort((a, b) => {
     const order = { enabled: 0, configured: 1, unconfigured: 2 };
     return order[getChannelStatus(a, ocConfig, installedPlugins, qqChannelState)] - order[getChannelStatus(b, ocConfig, installedPlugins, qqChannelState)];
   });
-  const sortedPlugin = CHANNEL_DEFS.filter(c => c.type === 'plugin').sort((a, b) => {
+  const sortedPlugin = channelDefs.filter(c => c.type === 'plugin').sort((a, b) => {
     const order = { enabled: 0, configured: 1, unconfigured: 2 };
     return order[getChannelStatus(a, ocConfig, installedPlugins, qqChannelState)] - order[getChannelStatus(b, ocConfig, installedPlugins, qqChannelState)];
   });
@@ -2209,53 +2460,17 @@ export default function Channels() {
                 </div>
               )}
 
-              {/* 飞书双版本选择器 */}
+              {/* 飞书内置通道提示 */}
               {currentDef.id === 'feishu' && (
                 <div className="rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-900/10 p-4 space-y-3">
-                  <div className="text-sm font-semibold text-gray-900 dark:text-white">当前飞书通道版本</div>
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <label className={`flex-1 flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                      getActiveFeishuVariant(ocConfig) === 'official'
-                        ? 'border-violet-500 bg-violet-100/50 dark:bg-violet-900/20'
-                        : 'border-gray-200 dark:border-gray-700 hover:border-violet-300 dark:hover:border-violet-600'
-                    }`}>
-                      <input type="radio" name="feishu-variant" value="official"
-                        checked={getActiveFeishuVariant(ocConfig) === 'official'}
-                        onChange={() => handleSwitchFeishuVariant('official')}
-                        className="mt-0.5 accent-violet-600" />
-                      <div>
-                        <div className="text-sm font-medium text-gray-900 dark:text-white">飞书官方版</div>
-                        <div className="text-[11px] text-gray-500 mt-0.5">
-                          支持用户身份授权、文档/日历/任务操作、流式卡片、话题独立上下文，需要先
-                          <a
-                            href="https://bytedance.larkoffice.com/docx/MFK7dDFLFoVlOGxWCv5cTXKmnMh"
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-violet-700 underline decoration-violet-400 underline-offset-2 hover:text-violet-800 dark:text-violet-300 dark:hover:text-violet-200"
-                          >
-                            手动安装飞书官方插件
-                          </a>
-                        </div>
-                      </div>
-                    </label>
-                    <label className={`flex-1 flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                      getActiveFeishuVariant(ocConfig) === 'clawteam'
-                        ? 'border-violet-500 bg-violet-100/50 dark:bg-violet-900/20'
-                        : 'border-gray-200 dark:border-gray-700 hover:border-violet-300 dark:hover:border-violet-600'
-                    }`}>
-                      <input type="radio" name="feishu-variant" value="clawteam"
-                        checked={getActiveFeishuVariant(ocConfig) === 'clawteam'}
-                        onChange={() => handleSwitchFeishuVariant('clawteam')}
-                        className="mt-0.5 accent-violet-600" />
-                      <div>
-                        <div className="text-sm font-medium text-gray-900 dark:text-white">ClawTeam 社区版</div>
-                        <div className="text-[11px] text-gray-500 mt-0.5">社区维护的基础飞书通道插件，支持话题回复、输入提示等</div>
-                      </div>
-                    </label>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">当前飞书接入模式</div>
+                  <div className="rounded-lg border border-violet-200/70 dark:border-violet-700/50 bg-white/70 dark:bg-slate-900/40 px-4 py-3 space-y-1.5">
+                    <div className="text-sm font-medium text-gray-900 dark:text-white">OpenClaw 内置飞书通道</div>
+                    <div className="text-[11px] text-gray-500 leading-relaxed">
+                      本机当前 OpenClaw 版本已直接内置 <span className="font-mono">feishu</span> 通道，默认不再需要额外安装飞书插件。
+                      面板仍会兼容旧的历史配置，但新部署建议直接按内置通道方式管理。
+                    </div>
                   </div>
-                  {!getActiveFeishuVariant(ocConfig) && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">未检测到已启用的飞书插件，请选择一个版本并启用</p>
-                  )}
                 </div>
               )}
 
@@ -2749,8 +2964,8 @@ export default function Channels() {
               {currentDef.id === 'telegram' && String(getEffectiveChannelConfig('telegram')?.dmPolicy || 'pairing') === 'pairing' && (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed space-y-1.5">
                   <div className="font-semibold text-amber-900 dark:text-amber-100">Telegram 当前处于配对模式</div>
-                  <div>首次私聊机器人时，OpenClaw 会返回 pairing code；当前面板还没有 Telegram 配对审批页。</div>
-                  <div>可在服务器执行 <span className="font-mono">openclaw pairing list telegram</span> 查看待审批请求，再执行 <span className="font-mono">openclaw pairing approve telegram &lt;code&gt;</span> 完成授权。</div>
+                  <div>首次私聊机器人时，OpenClaw 会返回 pairing code；现在可以直接在上方“统一配对审批”里查看并批准。</div>
+                  <div>如果需要排查底层状态，仍可在服务器执行 <span className="font-mono">openclaw pairing list telegram</span> 与 <span className="font-mono">openclaw pairing approve telegram &lt;code&gt;</span>。</div>
                   <div>如果你不想走配对流程，可把“私聊准入策略”改成 <span className="font-mono">open</span>。</div>
                 </div>
               )}
@@ -2872,11 +3087,80 @@ export default function Channels() {
                 </div>
               )}
 
+              {currentDef && currentChannelPairingEnabled && (
+                <div className="rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-900/10 p-4 space-y-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-100">统一配对审批</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                        当前通道启用了 <span className="font-mono">dmPolicy=pairing</span>。用户首次私聊时会先拿到 pairing code，需要在这里批准后才能继续对话。
+                        {resolvePairingAccountId(currentDef.id) ? <> 当前按账号 <span className="font-mono">{resolvePairingAccountId(currentDef.id)}</span> 过滤。</> : null}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => loadPairingRequests(currentDef.id, resolvePairingAccountId(currentDef.id) || undefined)}
+                      disabled={loadingPairingRequests}
+                      className={`${modern ? 'page-modern-action px-3 py-1.5 text-xs' : 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-white/80 dark:bg-gray-900/40 text-amber-800 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/40 hover:bg-white dark:hover:bg-gray-900 disabled:opacity-50 transition-colors'}`}
+                    >
+                      {loadingPairingRequests ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      刷新待审批
+                    </button>
+                  </div>
+
+                  {pairingRequests.length > 0 ? (
+                    <div className="space-y-3">
+                      {pairingRequests.map(request => (
+                        <div key={`${request.code}:${request.id}`} className="rounded-xl border border-amber-200/80 dark:border-amber-800/30 bg-white/80 dark:bg-gray-950/20 px-4 py-4">
+                          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                                  配对码 <span className="font-mono">{request.code}</span>
+                                </div>
+                                <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                                  待审批
+                                </span>
+                              </div>
+                              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                <div>发送者：<span className="font-mono text-gray-700 dark:text-gray-200 break-all">{request.id}</span></div>
+                                <div>创建时间：<span className="font-mono text-gray-700 dark:text-gray-200">{request.createdAt || '-'}</span></div>
+                                {request.lastSeenAt && (
+                                  <div>最近出现：<span className="font-mono text-gray-700 dark:text-gray-200">{request.lastSeenAt}</span></div>
+                                )}
+                                {Object.entries(request.meta || {}).map(([key, value]) => (
+                                  <div key={key}>
+                                    {key}：<span className="font-mono text-gray-700 dark:text-gray-200 break-all">{String(value || '-')}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleApprovePairingCode(currentDef.id, request.code, resolvePairingAccountId(currentDef.id) || undefined)}
+                              disabled={approvingPairingCode === request.code}
+                              className={`${modern ? 'page-modern-accent px-3 py-1.5 text-xs' : 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition-colors'}`}
+                            >
+                              {approvingPairingCode === request.code ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                              批准配对
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-amber-200/80 dark:border-amber-800/30 px-4 py-5 text-xs text-amber-700 dark:text-amber-300">
+                      {loadingPairingRequests ? '正在加载待审批 pairing 请求…' : '当前没有待审批的 pairing code。'}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {currentDef.id === 'feishu' && String(getEffectiveChannelConfig('feishu')?.dmPolicy || 'pairing') === 'pairing' && (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed space-y-1.5">
                   <div className="font-semibold text-amber-900 dark:text-amber-100">飞书当前处于配对模式</div>
                   <div>首次私聊机器人时，OpenClaw 会返回 pairing code。Lite 版保存有凭证时会优先写成免配对模式；如果你看到这里，重新保存一次配置通常就会改成免配对。</div>
-                  <div>若仍需手动审批，可在服务器执行 <span className="font-mono">clawlite-openclaw pairing list feishu</span> 查看待审批请求，再执行 <span className="font-mono">clawlite-openclaw pairing approve feishu &lt;code&gt;</span> 完成授权。</div>
+                  <div>现在可以直接在上方“统一配对审批”中查看并批准请求；只有在需要排查底层文件时才需要回 CLI。</div>
                 </div>
               )}
 
@@ -2890,7 +3174,7 @@ export default function Channels() {
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed space-y-1.5">
                   <div className="font-semibold text-amber-900 dark:text-amber-100">企业微信当前处于配对模式</div>
                   <div>Lite 版保存 Bot ID 和 Secret 时会优先写成免配对模式；如果你看到这里，重新保存一次配置通常就会改成免配对。</div>
-                  <div>若仍需手动审批，可在服务器执行 <span className="font-mono">clawlite-openclaw pairing list wecom</span> 查看待审批请求，再执行 <span className="font-mono">clawlite-openclaw pairing approve wecom &lt;code&gt;</span> 完成授权。</div>
+                  <div>现在可以直接在上方“统一配对审批”中查看并批准请求；只有在需要排查底层文件时才需要回 CLI。</div>
                 </div>
               )}
 

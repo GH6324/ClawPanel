@@ -20,7 +20,7 @@ import (
 	"github.com/zhaoxinyi02/ClawPanel/internal/taskman"
 )
 
-const pinnedOpenClawVersion = "2026.4.5"
+const pinnedOpenClawVersion = "2026.4.8"
 
 // SoftwareInfo 软件信息
 type SoftwareInfo struct {
@@ -1912,16 +1912,16 @@ echo "✅ 全部完成"
 	}
 }
 
-// GetTasks 获取任务列表
-func GetTasks(tm *taskman.Manager) gin.HandlerFunc {
+// GetPanelTasks 获取面板任务列表
+func GetPanelTasks(tm *taskman.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tasks := tm.GetRecentTasks()
 		c.JSON(http.StatusOK, gin.H{"ok": true, "tasks": tasks})
 	}
 }
 
-// GetTaskDetail 获取任务详情
-func GetTaskDetail(tm *taskman.Manager) gin.HandlerFunc {
+// GetPanelTaskDetail 获取面板任务详情
+func GetPanelTaskDetail(tm *taskman.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		task := tm.GetTask(id)

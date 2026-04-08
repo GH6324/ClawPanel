@@ -536,7 +536,11 @@ function findFakeSessionsById(sessionId: string, agentId?: string) {
 }
 
 export const mockApi = {
-  login: async (_token: string) => { await delay(500); return { ok: true, token: 'demo-token' }; },
+  login: async (token: string) => {
+    await delay(500);
+    if (token !== 'clawpanel') return { ok: false, token: '' };
+    return { ok: true, token: 'demo-token' };
+  },
   changePassword: async (_old: string, _new: string) => { await delay(300); return { ok: true }; },
   getStatus: async () => {
     await delay(100);
@@ -817,8 +821,10 @@ export const mockApi = {
   toggleSkill: async (_id: string, _enabled: boolean) => { await delay(200); return { ok: true }; },
   getEvents: async () => { await delay(200); return { ok: true, events: FAKE_LOGS }; },
   clearEvents: async () => { await delay(100); return { ok: true }; },
-  getTasks: async () => { await delay(80); return { ok: true, tasks: [] }; },
-  getTaskDetail: async (_id: string) => { await delay(80); return { ok: true, task: null }; },
+  getOpenClawTasks: async () => { await delay(80); return { ok: true, tasks: [], allTasks: [], taskPressure: { total: 0, active: 0, failures: 0, visible: 0, byStatus: {}, byRuntime: {}, updatedAt: Date.now() } }; },
+  getOpenClawTaskDetail: async (_id: string) => { await delay(80); return { ok: true, task: null }; },
+  getPanelTasks: async () => { await delay(80); return { ok: true, tasks: [] }; },
+  getPanelTaskDetail: async (_id: string) => { await delay(80); return { ok: true, task: null }; },
 
   // --- Plugin Center ---
   getPluginList: async () => { await delay(200); return { ok: true, plugins: JSON.parse(JSON.stringify(FAKE_PLUGINS)) }; },
@@ -900,18 +906,87 @@ export const mockApi = {
 
   // --- NapCat Advanced ---
   napcatRestart: async () => { await delay(500); return { ok: true }; },
-  napcatStatus: async () => { await delay(100); return { ok: true, connected: true, selfId: '2854196310', nickname: 'Demo Bot' }; },
+  napcatStatus: async () => {
+    await delay(100);
+    return {
+      ok: true,
+      status: {
+        status: 'online',
+        qqId: '2854196310',
+        qqNickname: 'OpenClaw Demo Bot',
+        autoReconnect: true,
+        reconnectCount: 0,
+        maxReconnect: 3,
+        containerRunning: true,
+        wsConnected: true,
+        httpAvailable: true,
+        qqLoggedIn: true,
+      },
+    };
+  },
   napcatReconnectLogs: async () => { await delay(200); return { ok: true, logs: [] }; },
   napcatReconnect: async () => { await delay(500); return { ok: true }; },
   napcatMonitorConfig: async (_data: any) => { await delay(200); return { ok: true }; },
   napcatDiagnose: async (_repair?: boolean) => { await delay(2000); return { ok: true, results: [{ id: 'napcat-conn', label: '连接状态', status: 'pass' }] }; },
 
   // --- QQ Channel ---
-  getQQChannelState: async () => { await delay(200); return { ok: true, state: 'not_configured' }; },
+  getQQChannelState: async () => {
+    await delay(200);
+    return {
+      ok: true,
+      state: {
+        pluginInstalled: true,
+        napcatInstalled: true,
+        channelConfigured: true,
+        enabled: true,
+      },
+    };
+  },
   setupQQChannel: async () => { await delay(1000); return { ok: true }; },
   repairQQChannel: async () => { await delay(1000); return { ok: true }; },
   cleanupQQChannel: async () => { await delay(500); return { ok: true }; },
   deleteQQChannel: async () => { await delay(500); return { ok: true }; },
+
+  // --- OpenClaw Weixin ---
+  getOpenClawWeixinStatus: async () => {
+    await delay(160);
+    return {
+      ok: true,
+      pluginInstalled: true,
+      pluginEnabled: true,
+      pendingLoginCount: 0,
+      accounts: [
+        {
+          accountId: 'wechat-demo',
+          name: '演示微信号',
+          status: 'online',
+        },
+      ],
+    };
+  },
+  startOpenClawWeixinQRCode: async (_data?: { force?: boolean; sessionKey?: string; accountId?: string }) => {
+    await delay(260);
+    return {
+      ok: true,
+      sessionKey: 'demo-weixin-session',
+      loginUrl: 'https://example.com/demo-weixin-login',
+      qrcode: '',
+    };
+  },
+  waitOpenClawWeixinQRCode: async (sessionKey: string, _timeoutMs = 35000) => {
+    await delay(400);
+    return {
+      ok: true,
+      sessionKey,
+      status: 'waiting',
+      loginUrl: 'https://example.com/demo-weixin-login',
+      qrcode: '',
+    };
+  },
+  logoutOpenClawWeixin: async (_accountId?: string) => {
+    await delay(260);
+    return { ok: true };
+  },
 
   // --- Misc ---
   checkModelHealth: async (_baseUrl: string, _apiKey: string, _apiType: string, _modelId?: string) => { await delay(1500); return { ok: true, healthy: true, latencyMs: 320, model: _modelId || 'default' }; },

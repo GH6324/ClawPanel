@@ -49,6 +49,7 @@ const zhCN: Translations = {
     subtitle: 'OpenClaw 管理面板',
     passwordLabel: '管理密码',
     passwordPlaceholder: '请输入面板密码',
+    demoPasswordHint: '演示密码：clawpanel',
     loginButton: '登 录',
     loggingIn: '登录中...',
     wrongPassword: '密码错误',

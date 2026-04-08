@@ -49,6 +49,7 @@ const en: Translations = {
     subtitle: 'OpenClaw Management Panel',
     passwordLabel: 'Admin Password',
     passwordPlaceholder: 'Enter panel password',
+    demoPasswordHint: 'Demo password: clawpanel',
     loginButton: 'Log In',
     loggingIn: 'Logging in...',
     wrongPassword: 'Wrong password',

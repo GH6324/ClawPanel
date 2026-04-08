@@ -1082,7 +1082,7 @@ func TestSaveChannelRejectsQQWhenPluginMissing(t *testing.T) {
 	}
 }
 
-func TestSaveChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
+func TestSaveChannelAllowsQQBotWithoutPluginInstall(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
@@ -1097,8 +1097,18 @@ func TestSaveChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	channels, _ := saved["channels"].(map[string]interface{})
+	qqbot, _ := channels["qqbot"].(map[string]interface{})
+	if strings.TrimSpace(fmt.Sprint(qqbot["appId"])) != "123" {
+		t.Fatalf("expected qqbot appId to be saved, got %#v", qqbot)
 	}
 }
 
@@ -1142,7 +1152,7 @@ func TestToggleChannelRejectsQQWhenPluginMissing(t *testing.T) {
 	}
 }
 
-func TestToggleChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
+func TestToggleChannelAllowsQQBotWithoutPluginInstall(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
@@ -1157,8 +1167,18 @@ func TestToggleChannelRejectsQQBotWhenPluginMissing(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	channels, _ := saved["channels"].(map[string]interface{})
+	qqbot, _ := channels["qqbot"].(map[string]interface{})
+	if enabled, _ := qqbot["enabled"].(bool); !enabled {
+		t.Fatalf("expected qqbot channel enabled, got %#v", qqbot)
 	}
 }
 

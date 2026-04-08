@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ScrollText, Radio, Sparkles, Clock, Settings,
   Moon, Sun, LogOut, Menu, FolderOpen, Languages, MessageSquare,
-  RotateCw, RefreshCw, Power, Puzzle, Bot, Search, Bell, ChevronDown, GitBranch, Network,
+  RotateCw, RefreshCw, Power, Puzzle, Bot, Search, Bell, ChevronDown, GitBranch, Network, Activity,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import AIAssistant from './AIAssistant';
@@ -82,7 +82,7 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
   const loadTasks = useCallback(async () => {
     try {
       const [taskRes, workflowRes] = await Promise.all([
-        api.getTasks(),
+        api.getPanelTasks(),
         api.getWorkflowRuns(),
       ]);
       const taskItems = taskRes?.ok ? (taskRes.tasks || []) : [];
@@ -133,6 +133,7 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
     ...(enableAgents ? [{ to: '/monitor', icon: Network, label: locale === 'zh-CN' ? '编排监控' : 'Monitor' }] : []),
     { to: '/workflows', icon: GitBranch, label: locale === 'zh-CN' ? '工作流' : 'Workflows' },
     { to: '/cron', icon: Clock, label: t.nav.cronJobs },
+    { to: '/tasks', icon: Activity, label: locale === 'zh-CN' ? '后台任务' : 'Tasks' },
     { to: '/sessions', icon: MessageSquare, label: '会话管理' },
     { to: '/workspace', icon: FolderOpen, label: t.nav.workspace },
     { to: '/config', icon: Settings, label: t.nav.systemConfig },
@@ -200,12 +201,19 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
     { label: '通道配置 - QQ个人号', keywords: ['qq', 'napcat', 'qq个人号', 'qq personal'], path: '/channels?channel=qq' },
     { label: '通道配置 - 飞书', keywords: ['feishu', 'lark', '飞书'], path: '/channels?channel=feishu' },
     { label: '通道配置 - QQ官方机器人', keywords: ['qqbot', 'qq官方', 'qq 官方机器人'], path: '/channels?channel=qqbot' },
+    { label: '通道配置 - Matrix', keywords: ['matrix'], path: '/channels?channel=matrix' },
+    { label: '通道配置 - Mattermost', keywords: ['mattermost'], path: '/channels?channel=mattermost' },
+    { label: '通道配置 - LINE', keywords: ['line'], path: '/channels?channel=line' },
+    { label: '通道配置 - Microsoft Teams', keywords: ['msteams', 'teams'], path: '/channels?channel=msteams' },
+    { label: '通道配置 - Twitch', keywords: ['twitch'], path: '/channels?channel=twitch' },
+    { label: '通道配置 - WhatsApp', keywords: ['whatsapp'], path: '/channels?channel=whatsapp' },
     { label: '技能中心', keywords: ['skills', 'skill', '技能'], path: '/skills' },
     { label: '插件中心', keywords: ['plugins', 'plugin', '插件'], path: '/plugins' },
     ...(enableAgents ? [{ label: locale === 'zh-CN' ? '智能体' : 'Agents', keywords: ['agent', 'agents', '智能体'], path: '/agents' }] : []),
     ...(enableAgents ? [{ label: locale === 'zh-CN' ? '编排监控' : 'Monitor', keywords: ['monitor', 'topology', '监控', '编排', '拓扑'], path: '/monitor' }] : []),
     { label: locale === 'zh-CN' ? '工作流中心' : 'Workflow Center', keywords: ['workflow', 'workflows', '流程', '工作流'], path: '/workflows' },
     { label: '定时任务', keywords: ['cron', 'jobs', '定时任务'], path: '/cron' },
+    { label: locale === 'zh-CN' ? '后台任务' : 'Background Tasks', keywords: ['tasks', 'background tasks', '任务账本', '后台任务'], path: '/tasks' },
     { label: '会话管理', keywords: ['session', 'sessions', '会话'], path: '/sessions' },
     { label: '工作区', keywords: ['workspace', '工作区', '文件'], path: '/workspace' },
     { label: '系统配置', keywords: ['config', 'settings', '系统配置'], path: '/config' },

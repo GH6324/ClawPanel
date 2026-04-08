@@ -32,6 +32,24 @@ interface RecentFeedItem {
   synthetic?: boolean;
 }
 
+interface TaskPressureSummary {
+  total?: number;
+  active?: number;
+  failures?: number;
+  visible?: number;
+  byStatus?: Record<string, number>;
+  byRuntime?: Record<string, number>;
+  focusTask?: {
+    taskId?: string;
+    label?: string;
+    task?: string;
+    status?: string;
+    progressSummary?: string;
+    terminalSummary?: string;
+    error?: string;
+  };
+}
+
 interface DashboardProps {
   logEntries: LogEntry[];
   refreshLog: () => void;
@@ -83,6 +101,7 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
   const gateway = status?.gateway || {};
   const proc = status?.process || {};
   const adm = status?.admin || {};
+  const taskPressure: TaskPressureSummary = oc.taskPressure || {};
   const runtime = resolveOpenClawRuntime(oc, proc, gateway);
   const runtimeTone = !oc.configured
     ? 'amber'
@@ -140,6 +159,11 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
   }
 
   const liveChannelCount = connectedChannels.filter((channel) => channel.status !== t.common.notLoggedIn).length;
+  const queuedTasks = Number(taskPressure.byStatus?.queued || 0);
+  const runningTasks = Number(taskPressure.byStatus?.running || 0);
+  const taskIssues = Number(taskPressure.failures || 0);
+  const taskFocusTitle = taskPressure.focusTask?.label || taskPressure.focusTask?.task || '';
+  const taskFocusDetail = taskPressure.focusTask?.error || taskPressure.focusTask?.progressSummary || taskPressure.focusTask?.terminalSummary || '';
 
   const [installingOC, setInstallingOC] = useState(false);
   const [installOpenClawMsg, setInstallOpenClawMsg] = useState('');
@@ -252,6 +276,10 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
           sub={gateway.running ? '消息链路可用' : '建议重启网关'}
           color={gateway.running ? 'text-blue-600' : 'text-amber-600'}
           bg={gateway.running ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-amber-50 dark:bg-amber-900/20'} modern={modern} />
+        <StatCard icon={Clock} label="后台任务" value={`${queuedTasks + runningTasks}`} unit="个"
+          sub={taskIssues > 0 ? `${taskIssues} 个异常` : `${queuedTasks} 排队 · ${runningTasks} 运行中`}
+          color={taskIssues > 0 ? 'text-red-600' : (queuedTasks + runningTasks) > 0 ? 'text-amber-600' : 'text-emerald-600'}
+          bg={taskIssues > 0 ? 'bg-red-50 dark:bg-red-900/20' : (queuedTasks + runningTasks) > 0 ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-emerald-50 dark:bg-emerald-900/20'} modern={modern} />
         <StatCard icon={Radio} label={t.dashboard.activeChannels} value={`${connectedChannels.length}`} unit={t.dashboard.channelUnit || undefined}
           sub={connectedChannels.length > 0 ? connectedChannels.map(c => c.name).join(', ') : t.dashboard.noChannels}
           color="text-emerald-600" bg="bg-emerald-50 dark:bg-emerald-900/20" modern={modern} />
@@ -268,6 +296,31 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
             sub={connectedChannels.length > 0 ? 'Live status' : t.dashboard.noChannels} color="text-indigo-600" bg="bg-indigo-50 dark:bg-indigo-900/20" modern={modern} />
         )}
       </div>
+
+      {oc.configured && (queuedTasks + runningTasks > 0 || taskIssues > 0 || taskFocusTitle) && (
+        <div className={`${modern ? 'rounded-[28px] border border-white/60 dark:border-slate-700/50 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(248,250,252,0.7))] dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.92),rgba(51,65,85,0.22))] backdrop-blur-xl shadow-[0_22px_48px_rgba(15,23,42,0.06)]' : 'bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50'} p-5`}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white">OpenClaw 后台任务</h3>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {queuedTasks} 排队 · {runningTasks} 运行中 · {taskIssues} 异常
+              </p>
+            </div>
+            <button
+              onClick={() => window.location.assign('/tasks')}
+              className={`${modern ? 'page-modern-action px-3 py-1.5 text-xs' : 'px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors'}`}
+            >
+              查看任务账本
+            </button>
+          </div>
+          {taskFocusTitle && (
+            <div className="mt-4 rounded-2xl border border-slate-200/70 dark:border-slate-700/60 bg-white/70 dark:bg-slate-900/30 px-4 py-3">
+              <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">{taskFocusTitle}</div>
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{taskFocusDetail || '当前有后台任务活动，详细信息见任务账本。'}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Connected channel cards — only show connected */}
       {connectedChannels.length > 0 && (

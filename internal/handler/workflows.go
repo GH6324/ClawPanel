@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,15 @@ import (
 const workflowTaskType = "workflow_run"
 
 var workflowShortIDPattern = regexp.MustCompile(`#([A-Za-z0-9]{4,12})`)
+
+const (
+	openClawWeixinAppID            = "bot"
+	openClawWeixinClientVersion    = "131334"
+	openClawWeixinChannelVersion   = "2.1.6"
+	openClawWeixinMessageTypeBot   = 2
+	openClawWeixinMessageStateDone = 2
+	openClawWeixinMessageItemText  = 1
+)
 
 type workflowRuntime struct {
 	db      *sql.DB
@@ -194,7 +204,20 @@ func (rt *workflowRuntime) StartRunFromTemplate() gin.HandlerFunc {
 			Context        map[string]interface{} `json:"context"`
 		}
 		_ = c.ShouldBindJSON(&req)
-		run, steps, err := rt.instantiateRun(tpl, req.Input, req.ChannelID, req.ConversationID, req.UserID, req.SourceMessage, req.Context)
+		channelID := strings.TrimSpace(req.ChannelID)
+		conversationID := strings.TrimSpace(req.ConversationID)
+		userID := strings.TrimSpace(req.UserID)
+		sourceMessage := strings.TrimSpace(req.SourceMessage)
+		if channelID == "openclaw-weixin" {
+			resolvedAccountID, resolvedUserID, _, resolveErr := rt.resolveOpenClawWeixinTarget(conversationID, userID)
+			if resolveErr != nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "error": resolveErr.Error()})
+				return
+			}
+			conversationID = resolvedAccountID
+			userID = resolvedUserID
+		}
+		run, steps, err := rt.instantiateRun(tpl, req.Input, channelID, conversationID, userID, sourceMessage, req.Context)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 			return
@@ -346,11 +369,14 @@ func (rt *workflowRuntime) interceptWaitingRuns(channelID, conversationID, userI
 		if run.Status != "waiting_for_user" && run.Status != "waiting_for_approval" && run.Status != "paused" {
 			continue
 		}
+		if run.ChannelID == "openclaw-weixin" {
+			rt.hydrateOpenClawWeixinRunTarget(&run)
+		}
 		if mentionedShortID != "" && strings.EqualFold(run.ShortID, mentionedShortID) {
 			candidates = append(candidates, run)
 			continue
 		}
-		if mentionedShortID == "" && run.ChannelID == channelID && run.ConversationID == conversationID {
+		if mentionedShortID == "" && rt.workflowOriginMatches(&run, channelID, conversationID, userID) {
 			candidates = append(candidates, run)
 		}
 	}
@@ -486,14 +512,19 @@ func (rt *workflowRuntime) workflowProgressMode() string {
 }
 
 func (rt *workflowRuntime) shouldPushRunMessage(run *model.WorkflowRun, category string) bool {
-	if run == nil || !rt.shouldPushProgress() {
+	if run == nil {
 		return false
 	}
 	switch category {
-	case "waiting", "failed", "completed":
+	case "waiting", "failed":
 		return true
 	case "progress":
+		if !rt.shouldPushProgress() {
+			return false
+		}
 		return rt.workflowProgressMode() == "detailed"
+	case "completed":
+		return rt.shouldPushProgress()
 	default:
 		return false
 	}
@@ -637,9 +668,214 @@ func (rt *workflowRuntime) sendWorkflowAck(channelID, conversationID, userID, me
 			responseURL = ""
 		}
 		return rt.sendWecomText(responseURL, message)
+	case "openclaw-weixin":
+		accountID, targetUserID, contextToken, err := rt.resolveOpenClawWeixinTarget(conversationID, userID)
+		if err != nil {
+			return err
+		}
+		return rt.sendOpenClawWeixinText(accountID, targetUserID, contextToken, message)
 	default:
 		return fmt.Errorf("channel not supported yet: %s", channelID)
 	}
+}
+
+func (rt *workflowRuntime) configuredOpenClawWeixinAccountIDs() []string {
+	ids := loadOpenClawWeixinAccountIndex(rt.cfg)
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, accountID := range ids {
+		account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+		if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+			continue
+		}
+		out = append(out, accountID)
+	}
+	return out
+}
+
+func (rt *workflowRuntime) loadOpenClawWeixinContextToken(accountID, userID string) string {
+	accountID = normalizeOpenClawWeixinAccountID(accountID)
+	userID = strings.TrimSpace(userID)
+	if accountID == "" || userID == "" {
+		return ""
+	}
+	path := filepath.Join(openClawWeixinAccountsDir(rt.cfg), accountID+".context-tokens.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var tokens map[string]string
+	if json.Unmarshal(raw, &tokens) != nil {
+		return ""
+	}
+	return strings.TrimSpace(tokens[userID])
+}
+
+func (rt *workflowRuntime) resolveOpenClawWeixinTarget(conversationID, userID string) (string, string, string, error) {
+	accountID := strings.TrimSpace(conversationID)
+	targetUserID := strings.TrimSpace(userID)
+	if strings.HasSuffix(accountID, "@im.wechat") && targetUserID == "" {
+		targetUserID = accountID
+		accountID = ""
+	}
+	if strings.HasSuffix(targetUserID, "@im.wechat") {
+		targetUserID = strings.TrimSpace(targetUserID)
+	}
+	if accountID != "" && !strings.HasSuffix(accountID, "@im.wechat") {
+		accountID = normalizeOpenClawWeixinAccountID(accountID)
+	}
+	configured := rt.configuredOpenClawWeixinAccountIDs()
+	if accountID == "" {
+		if len(configured) == 1 {
+			accountID = configured[0]
+		} else if targetUserID != "" {
+			matched := make([]string, 0, len(configured))
+			for _, candidate := range configured {
+				if rt.loadOpenClawWeixinContextToken(candidate, targetUserID) != "" {
+					matched = append(matched, candidate)
+				}
+			}
+			if len(matched) == 1 {
+				accountID = matched[0]
+			} else if len(matched) > 1 {
+				return "", "", "", fmt.Errorf("微信目标用户命中了多个账号，请先指定微信账号 ID")
+			}
+		}
+	}
+	if accountID == "" {
+		return "", "", "", fmt.Errorf("微信通道缺少可用账号，请先在通道管理里完成微信登录")
+	}
+	account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+	if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+		return "", "", "", fmt.Errorf("微信账号未配置完成：%s", accountID)
+	}
+	if targetUserID == "" {
+		targetUserID = strings.TrimSpace(account.UserID)
+	}
+	if targetUserID == "" {
+		return "", "", "", fmt.Errorf("微信通道缺少用户目标，请先让目标用户与机器人建立会话，或在高级选项里填写微信用户 ID")
+	}
+	return accountID, targetUserID, rt.loadOpenClawWeixinContextToken(accountID, targetUserID), nil
+}
+
+func (rt *workflowRuntime) hydrateOpenClawWeixinRunTarget(run *model.WorkflowRun) {
+	if run == nil || strings.TrimSpace(run.ChannelID) != "openclaw-weixin" {
+		return
+	}
+	accountID, targetUserID, _, err := rt.resolveOpenClawWeixinTarget(run.ConversationID, run.UserID)
+	if err != nil {
+		return
+	}
+	changed := false
+	if strings.TrimSpace(run.ConversationID) == "" {
+		run.ConversationID = accountID
+		changed = true
+	}
+	if strings.TrimSpace(run.UserID) == "" {
+		run.UserID = targetUserID
+		changed = true
+	}
+	if changed {
+		_ = model.UpdateWorkflowRun(rt.db, run)
+	}
+}
+
+func (rt *workflowRuntime) workflowOriginMatches(run *model.WorkflowRun, channelID, conversationID, userID string) bool {
+	if run == nil || strings.TrimSpace(run.ChannelID) != strings.TrimSpace(channelID) {
+		return false
+	}
+	if strings.TrimSpace(channelID) != "openclaw-weixin" {
+		return strings.TrimSpace(run.ConversationID) == strings.TrimSpace(conversationID)
+	}
+	runAccountID, runUserID, _, runErr := rt.resolveOpenClawWeixinTarget(run.ConversationID, run.UserID)
+	inboundAccountID, inboundUserID, _, inboundErr := rt.resolveOpenClawWeixinTarget(conversationID, userID)
+	if runErr == nil && inboundErr == nil {
+		if inboundUserID != "" && runUserID != "" && strings.EqualFold(runUserID, inboundUserID) {
+			return true
+		}
+		if inboundAccountID != "" && runAccountID != "" && strings.EqualFold(runAccountID, inboundAccountID) {
+			return inboundUserID == "" || runUserID == "" || strings.EqualFold(runUserID, inboundUserID)
+		}
+	}
+	if strings.TrimSpace(userID) != "" && strings.EqualFold(strings.TrimSpace(run.UserID), strings.TrimSpace(userID)) {
+		return true
+	}
+	return strings.TrimSpace(run.ConversationID) != "" && strings.TrimSpace(run.ConversationID) == strings.TrimSpace(conversationID)
+}
+
+func openClawWeixinRequestUIN() string {
+	seed := fmt.Sprintf("%d", time.Now().UnixNano()&0xffffffff)
+	return base64.StdEncoding.EncodeToString([]byte(seed))
+}
+
+func (rt *workflowRuntime) sendOpenClawWeixinText(accountID, toUserID, contextToken, text string) error {
+	accountID = normalizeOpenClawWeixinAccountID(accountID)
+	toUserID = strings.TrimSpace(toUserID)
+	text = strings.TrimSpace(text)
+	if accountID == "" {
+		return fmt.Errorf("missing Weixin account id")
+	}
+	if toUserID == "" {
+		return fmt.Errorf("missing Weixin target user")
+	}
+	if text == "" {
+		return nil
+	}
+	account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+	if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+		return fmt.Errorf("微信账号未配置完成：%s", accountID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(account.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = openClawWeixinDefaultBaseURL
+	}
+	clientID := "clawpanel-workflow-" + randomOpenClawWeixinSessionKey()
+	body := map[string]interface{}{
+		"msg": map[string]interface{}{
+			"from_user_id":  "",
+			"to_user_id":    toUserID,
+			"client_id":     clientID,
+			"message_type":  openClawWeixinMessageTypeBot,
+			"message_state": openClawWeixinMessageStateDone,
+			"item_list": []map[string]interface{}{
+				{
+					"type": openClawWeixinMessageItemText,
+					"text_item": map[string]string{
+						"text": text,
+					},
+				},
+			},
+		},
+		"base_info": map[string]string{
+			"channel_version": openClawWeixinChannelVersion,
+		},
+	}
+	if strings.TrimSpace(contextToken) != "" {
+		body["msg"].(map[string]interface{})["context_token"] = strings.TrimSpace(contextToken)
+	}
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", baseURL+"/ilink/bot/sendmessage", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("AuthorizationType", "ilink_bot_token")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(account.Token))
+	req.Header.Set("X-WECHAT-UIN", openClawWeixinRequestUIN())
+	req.Header.Set("iLink-App-Id", openClawWeixinAppID)
+	req.Header.Set("iLink-App-ClientVersion", openClawWeixinClientVersion)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("openclaw-weixin send failed: http %d %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
 }
 
 func workflowArtifactFileServerURL(absPath string) string {
@@ -1171,6 +1407,7 @@ func (rt *workflowRuntime) applyRunControl(run *model.WorkflowRun, action, reply
 		if run.Context == nil {
 			run.Context = map[string]interface{}{}
 		}
+		reply = normalizeWorkflowUserReply(reply)
 		if reply != "" {
 			run.Context["latestUserReply"] = reply
 		}
@@ -1206,7 +1443,7 @@ func (rt *workflowRuntime) applyRunControl(run *model.WorkflowRun, action, reply
 						steps[i].OutputText = "approved"
 					}
 				case "wait_user", "input":
-					if strings.TrimSpace(reply) != "" {
+					if reply != "" {
 						steps[i].Status = "completed"
 						steps[i].OutputText = reply
 					} else {
@@ -1531,9 +1768,9 @@ func (rt *workflowRuntime) executeRun(runID string) {
 			rt.pushRunMessageToOrigin(run, "waiting", run.LastMessage)
 			return
 		case "wait_user", "input":
-			userReply := strings.TrimSpace(toStringLocal(step.Input["userReply"]))
+			userReply := normalizeWorkflowUserReply(step.Input["userReply"])
 			if userReply == "" && run.Context != nil {
-				userReply = strings.TrimSpace(toStringLocal(run.Context["latestUserReply"]))
+				userReply = normalizeWorkflowUserReply(run.Context["latestUserReply"])
 			}
 			if userReply != "" {
 				step.Status = "completed"
@@ -2047,6 +2284,23 @@ func (rt *workflowRuntime) loadSkillInstruction(skillID string) (string, error) 
 }
 
 func (rt *workflowRuntime) generateProgressMessage(run *model.WorkflowRun, step *model.WorkflowStep, phase string) string {
+	if phase == "wait_user" {
+		prompt := workflowWaitPrompt(step)
+		required := workflowRequiredFields(step)
+		if prompt != "" || len(required) > 0 {
+			var lines []string
+			if prompt != "" {
+				lines = append(lines, prompt)
+			} else {
+				lines = append(lines, fmt.Sprintf("请先补充「%s」所需信息。", step.Title))
+			}
+			if len(required) > 0 {
+				lines = append(lines, "请至少补充这些信息："+strings.Join(required, "、"))
+			}
+			lines = append(lines, fmt.Sprintf("工作流：%s（%s）", run.Name, run.ShortID))
+			return strings.Join(lines, "\n")
+		}
+	}
 	prompt := fmt.Sprintf("请为用户生成一条自然的工作流进度消息。工作流名称：%s，短 ID：%s，当前步骤：%s，阶段：%s。要求简洁、自然、像真人运营助手，不要死板模板，但必须提到工作流名称和短 ID。", run.Name, run.ShortID, step.Title, phase)
 	text, _, err := rt.callWorkflowModel([]map[string]string{{"role": "system", "content": "你是工作流进度播报助手。消息要简洁自然。"}, {"role": "user", "content": prompt}})
 	if err == nil && strings.TrimSpace(text) != "" {
@@ -2236,7 +2490,8 @@ func (rt *workflowRuntime) callWorkflowModel(messages []map[string]string) (stri
 		body, _ = json.Marshal(payload)
 	default:
 		headers["Authorization"] = "Bearer " + apiKey
-		if apiType == "openai-responses" || apiType == "openai-response" || apiType == "openai" || strings.Contains(strings.ToLower(baseURL), "/v1") {
+		normalizedAPIType := strings.ToLower(strings.TrimSpace(apiType))
+		if normalizedAPIType == "openai-responses" || normalizedAPIType == "openai-response" {
 			url = baseURL + "/responses"
 			input := make([]map[string]interface{}, 0, len(messages))
 			for _, m := range messages {
@@ -2250,6 +2505,7 @@ func (rt *workflowRuntime) callWorkflowModel(messages []map[string]string) (stri
 		} else {
 			url = baseURL + "/chat/completions"
 			body, _ = json.Marshal(map[string]interface{}{"model": mid, "messages": messages, "max_tokens": 2048})
+			apiType = "openai-completions"
 		}
 	}
 	client := &http.Client{Timeout: 120 * time.Second}
@@ -2281,7 +2537,25 @@ func (rt *workflowRuntime) callWorkflowModel(messages []map[string]string) (stri
 		return "", nil, doErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if apiType == "openai-completions" && strings.Contains(string(respBody), "/v1/responses") {
+		if apiType == "openai-responses" && (resp.StatusCode == http.StatusNotFound || strings.Contains(strings.ToLower(string(respBody)), "not found")) {
+			url = baseURL + "/chat/completions"
+			body, _ = json.Marshal(map[string]interface{}{"model": mid, "messages": messages, "max_tokens": 2048})
+			req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			resp, err = client.Do(req)
+			if err != nil {
+				return "", nil, err
+			}
+			respBody, _ = io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				apiType = "openai-completions"
+			} else {
+				return "", nil, fmt.Errorf("workflow AI 请求失败: %s", strings.TrimSpace(string(respBody)))
+			}
+		} else if apiType == "openai-completions" && strings.Contains(string(respBody), "/v1/responses") {
 			headers["Authorization"] = "Bearer " + apiKey
 			url = baseURL + "/responses"
 			input := make([]map[string]interface{}, 0, len(messages))
@@ -2409,10 +2683,66 @@ func mustJSON(v interface{}) string {
 }
 
 func toStringLocal(v interface{}) string {
+	if v == nil {
+		return ""
+	}
 	if s, ok := v.(string); ok {
 		return s
 	}
 	return fmt.Sprint(v)
+}
+
+func normalizeWorkflowUserReply(v interface{}) string {
+	reply := strings.TrimSpace(toStringLocal(v))
+	switch strings.ToLower(reply) {
+	case "", "<nil>", "nil", "null", "undefined":
+		return ""
+	default:
+		return reply
+	}
+}
+
+func workflowRequiredFields(step *model.WorkflowStep) []string {
+	if step == nil || step.Input == nil {
+		return nil
+	}
+	raw, ok := step.Input["requiredFields"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch items := raw.(type) {
+	case []interface{}:
+		fields := make([]string, 0, len(items))
+		for _, item := range items {
+			field := strings.TrimSpace(toStringLocal(item))
+			if field != "" {
+				fields = append(fields, field)
+			}
+		}
+		return fields
+	case []string:
+		fields := make([]string, 0, len(items))
+		for _, item := range items {
+			field := strings.TrimSpace(item)
+			if field != "" {
+				fields = append(fields, field)
+			}
+		}
+		return fields
+	default:
+		field := strings.TrimSpace(toStringLocal(items))
+		if field == "" {
+			return nil
+		}
+		return []string{field}
+	}
+}
+
+func workflowWaitPrompt(step *model.WorkflowStep) string {
+	if step == nil || step.Input == nil {
+		return ""
+	}
+	return strings.TrimSpace(toStringLocal(step.Input["question"]))
 }
 
 func GetDefaultWorkflowTemplates() []model.WorkflowTemplate {

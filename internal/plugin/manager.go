@@ -29,9 +29,6 @@ const (
 var officialFeishuPluginIDs = []string{"openclaw-lark"}
 
 var preferredPluginPackageSpecs = map[string]string{
-	"qqbot":           "@sliverp/qqbot@latest",
-	"feishu":          "@openclaw/feishu@latest",
-	"openclaw-lark":   "@larksuite/openclaw-lark@latest",
 	"dingtalk":        "@largezhou/ddingtalk@latest",
 	"wecom":           "@wecom/wecom-openclaw-plugin@latest",
 	"wecom-app":       "@openclaw-china/wecom-app@latest",
@@ -39,39 +36,6 @@ var preferredPluginPackageSpecs = map[string]string{
 }
 
 var builtInOfficialChannelPlugins = map[string]RegistryPlugin{
-	"qqbot": {
-		PluginMeta: PluginMeta{
-			ID:          "qqbot",
-			Name:        "QQ 官方机器人通道",
-			Version:     "latest",
-			Author:      "ClawPanel Team",
-			Description: "QQ 官方机器人 API 通道插件",
-			Category:    "channel",
-		},
-		NpmPackage: "@sliverp/qqbot",
-	},
-	"feishu": {
-		PluginMeta: PluginMeta{
-			ID:          "feishu",
-			Name:        "飞书 / Lark",
-			Version:     "latest",
-			Author:      "ClawPanel Team",
-			Description: "飞书 / Lark 通道插件",
-			Category:    "channel",
-		},
-		NpmPackage: "@openclaw/feishu",
-	},
-	"openclaw-lark": {
-		PluginMeta: PluginMeta{
-			ID:          "openclaw-lark",
-			Name:        "飞书 / Lark（飞书官方版）",
-			Version:     "latest",
-			Author:      "Feishu Team",
-			Description: "飞书官方 OpenClaw 插件",
-			Category:    "channel",
-		},
-		NpmPackage: "@larksuite/openclaw-lark",
-	},
 	"dingtalk": {
 		PluginMeta: PluginMeta{
 			ID:          "dingtalk",
@@ -388,6 +352,36 @@ func preferredPluginDownloadURL(regPlugin *RegistryPlugin) string {
 	default:
 		return ""
 	}
+}
+
+var bundledOfficialChannelIDs = []string{
+	"bluebubbles",
+	"discord",
+	"feishu",
+	"googlechat",
+	"imessage",
+	"irc",
+	"line",
+	"matrix",
+	"mattermost",
+	"msteams",
+	"nextcloud-talk",
+	"nostr",
+	"qa-channel",
+	"qqbot",
+	"signal",
+	"slack",
+	"synology-chat",
+	"telegram",
+	"tlon",
+	"twitch",
+	"whatsapp",
+	"zalo",
+	"qq",
+	"dingtalk",
+	"wecom",
+	"wecom-app",
+	"openclaw-weixin",
 }
 
 func builtInOfficialChannelPlugin(pluginID string) *RegistryPlugin {
@@ -1088,7 +1082,7 @@ func (m *Manager) scanLiteRuntimePlugins() {
 			entries = currentEntries
 		}
 	}
-	for _, pluginID := range []string{"telegram", "feishu", "openclaw-lark", "qq", "qqbot", "dingtalk", "wecom", "wecom-app", "openclaw-weixin"} {
+	for _, pluginID := range bundledOfficialChannelIDs {
 		pluginDir := filepath.Join(appDir, "extensions", pluginID)
 		meta, err := m.readPluginMeta(pluginDir)
 		if err != nil {
@@ -1528,39 +1522,8 @@ func cleanupChannelConfigForPlugin(ocConfig map[string]interface{}, pluginID str
 	if channels == nil {
 		return
 	}
-	pluginEntries, _ := ocConfig["plugins"].(map[string]interface{})
-	entries, _ := pluginEntries["entries"].(map[string]interface{})
-	installs, _ := pluginEntries["installs"].(map[string]interface{})
-	stillInstalled := func(id string) bool {
-		if entries != nil {
-			if _, ok := entries[id]; ok {
-				return true
-			}
-		}
-		if installs != nil {
-			if _, ok := installs[id]; ok {
-				return true
-			}
-		}
-		return false
-	}
 	switch pluginID {
-	case "openclaw-lark":
-		if !stillInstalled("feishu") {
-			delete(channels, "feishu")
-		}
-	case "feishu":
-		officialStillInstalled := false
-		for _, id := range officialFeishuPluginIDs {
-			if stillInstalled(id) {
-				officialStillInstalled = true
-				break
-			}
-		}
-		if !officialStillInstalled {
-			delete(channels, "feishu")
-		}
-	case "wecom", "wecom-app", "dingtalk", "qqbot", "discord", "mattermost", "line", "matrix", "twitch", "msteams", "openclaw-weixin":
+	case "wecom", "wecom-app", "dingtalk", "openclaw-weixin":
 		delete(channels, pluginID)
 	}
 }
