@@ -1179,6 +1179,7 @@ func (m *Manager) ensureOpenClawConfig() {
 	}
 	m.patchWecomPluginChannel(ocDir)
 	m.patchFeishuPluginChannel(ocDir)
+	m.patchOpenClawWeixinPluginChannel(ocDir)
 }
 
 func (m *Manager) shouldManageQQIntegration(ocConfig map[string]interface{}, qqExtDir string) (bool, bool) {
@@ -1677,6 +1678,60 @@ func (m *Manager) patchFeishuPluginChannel(ocDir string) {
 	}
 	if !patchedAny {
 		log.Println("[ProcessMgr] Feishu 工作流拦截补丁未命中（可能已应用或文件结构不同）")
+	}
+}
+
+func (m *Manager) patchOpenClawWeixinPluginChannel(ocDir string) {
+	paths := []string{}
+	if ocDir != "" {
+		paths = append(paths, filepath.Join(ocDir, "extensions", "openclaw-weixin", "src", "messaging", "process-message.ts"))
+	}
+	if m.cfg != nil && m.cfg.OpenClawApp != "" {
+		paths = append(paths, filepath.Join(m.cfg.OpenClawApp, "extensions", "openclaw-weixin", "src", "messaging", "process-message.ts"))
+	}
+	managerPort := 19527
+	if m.cfg != nil && m.cfg.Port > 0 {
+		managerPort = m.cfg.Port
+	}
+	workflowURLLine := fmt.Sprintf("const WORKFLOW_INTERCEPT_URL = \"http://127.0.0.1:%d/api/workflows/intercept\";", managerPort)
+	workflowTokenLine := fmt.Sprintf("const WORKFLOW_TOKEN = %q;", strings.TrimSpace(m.cfg.AdminToken))
+	urlPattern := regexp.MustCompile(`const\s+WORKFLOW_INTERCEPT_URL\s*=\s*"[^"]*";`)
+	tokenPattern := regexp.MustCompile(`const\s+WORKFLOW_TOKEN\s*=\s*"[^"]*";`)
+
+	patchedAny := false
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		next := string(data)
+		changed := false
+		if urlPattern.MatchString(next) {
+			replaced := urlPattern.ReplaceAllString(next, workflowURLLine)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if tokenPattern.MatchString(next) {
+			replaced := tokenPattern.ReplaceAllString(next, workflowTokenLine)
+			if replaced != next {
+				next = replaced
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := os.WriteFile(p, []byte(next), 0644); err != nil {
+			log.Printf("[ProcessMgr] openclaw-weixin 工作流补丁写入失败 (%s): %v", p, err)
+			continue
+		}
+		patchedAny = true
+		log.Printf("[ProcessMgr] ✅ openclaw-weixin 工作流补丁已应用: %s", p)
+	}
+	if !patchedAny {
+		log.Println("[ProcessMgr] openclaw-weixin 工作流补丁未命中（可能已应用或文件结构不同）")
 	}
 }
 

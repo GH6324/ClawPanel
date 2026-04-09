@@ -2,14 +2,19 @@ package handler
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/md5"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -34,7 +39,24 @@ const (
 	openClawWeixinMessageTypeBot   = 2
 	openClawWeixinMessageStateDone = 2
 	openClawWeixinMessageItemText  = 1
+	openClawWeixinMessageItemImage = 2
+	openClawWeixinMessageItemFile  = 4
+	openClawWeixinMediaTypeImage   = 1
+	openClawWeixinMediaTypeFile    = 3
+	openClawWeixinMediaEncryptType = 1
 )
+
+type openClawWeixinUploadURLResponse struct {
+	UploadParam   string `json:"upload_param"`
+	UploadFullURL string `json:"upload_full_url"`
+}
+
+type workflowBinaryArtifactRecord struct {
+	AbsolutePath string
+	FileName     string
+	ArtifactName string
+	MimeType     string
+}
 
 type workflowRuntime struct {
 	db      *sql.DB
@@ -878,12 +900,305 @@ func (rt *workflowRuntime) sendOpenClawWeixinText(accountID, toUserID, contextTo
 	return nil
 }
 
+func openClawWeixinEncryptAESECB(plaintext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	pad := aes.BlockSize - (len(plaintext) % aes.BlockSize)
+	if pad == 0 {
+		pad = aes.BlockSize
+	}
+	padded := append(append([]byte{}, plaintext...), bytes.Repeat([]byte{byte(pad)}, pad)...)
+	out := make([]byte, len(padded))
+	for i := 0; i < len(padded); i += aes.BlockSize {
+		block.Encrypt(out[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
+	}
+	return out, nil
+}
+
+func openClawWeixinUploadURL(cdnBaseURL, uploadFullURL, uploadParam, fileKey string) string {
+	if trimmed := strings.TrimSpace(uploadFullURL); trimmed != "" {
+		return trimmed
+	}
+	cdnBaseURL = strings.TrimRight(strings.TrimSpace(cdnBaseURL), "/")
+	return fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s", cdnBaseURL, url.QueryEscape(strings.TrimSpace(uploadParam)), url.QueryEscape(strings.TrimSpace(fileKey)))
+}
+
+func (rt *workflowRuntime) openClawWeixinPostJSON(baseURL, endpoint, token string, payload interface{}, out interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", strings.TrimRight(baseURL, "/")+"/"+strings.TrimLeft(endpoint, "/"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("AuthorizationType", "ilink_bot_token")
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	req.Header.Set("X-WECHAT-UIN", openClawWeixinRequestUIN())
+	req.Header.Set("iLink-App-Id", openClawWeixinAppID)
+	req.Header.Set("iLink-App-ClientVersion", openClawWeixinClientVersion)
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("openclaw-weixin %s failed: http %d %s", endpoint, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	if out != nil && len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type openClawWeixinUploadedFile struct {
+	downloadEncryptedQueryParam string
+	aesKeyBase64                string
+	fileSize                    int
+	fileSizeCiphertext          int
+}
+
+func (rt *workflowRuntime) uploadOpenClawWeixinArtifact(accountID, toUserID, absPath string, mediaType int) (*openClawWeixinUploadedFile, error) {
+	accountID = normalizeOpenClawWeixinAccountID(accountID)
+	toUserID = strings.TrimSpace(toUserID)
+	absPath = strings.TrimSpace(absPath)
+	if accountID == "" || toUserID == "" || absPath == "" {
+		return nil, fmt.Errorf("openclaw-weixin upload target missing")
+	}
+	account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+	if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+		return nil, fmt.Errorf("微信账号未配置完成：%s", accountID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(account.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = openClawWeixinDefaultBaseURL
+	}
+	cdnBaseURL := openClawWeixinDefaultCDNBaseURL
+	plaintext, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, err
+	}
+	rawSize := len(plaintext)
+	rawMD5 := md5.Sum(plaintext)
+	aesKeyHex := randomOpenClawWeixinSessionKey()
+	aesKey, err := hex.DecodeString(aesKeyHex)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext, err := openClawWeixinEncryptAESECB(plaintext, aesKey)
+	if err != nil {
+		return nil, err
+	}
+	fileKey := randomOpenClawWeixinSessionKey()
+	reqPayload := map[string]interface{}{
+		"filekey":       fileKey,
+		"media_type":    mediaType,
+		"to_user_id":    toUserID,
+		"rawsize":       rawSize,
+		"rawfilemd5":    hex.EncodeToString(rawMD5[:]),
+		"filesize":      len(ciphertext),
+		"no_need_thumb": true,
+		"aeskey":        aesKeyHex,
+		"base_info": map[string]string{
+			"channel_version": openClawWeixinChannelVersion,
+		},
+	}
+	var uploadResp openClawWeixinUploadURLResponse
+	if err := rt.openClawWeixinPostJSON(baseURL, "ilink/bot/getuploadurl", account.Token, reqPayload, &uploadResp); err != nil {
+		return nil, err
+	}
+	uploadURL := openClawWeixinUploadURL(cdnBaseURL, uploadResp.UploadFullURL, uploadResp.UploadParam, fileKey)
+	httpReq, err := http.NewRequest("POST", uploadURL, bytes.NewReader(ciphertext))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openclaw-weixin cdn upload failed: http %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	encryptedParam := strings.TrimSpace(resp.Header.Get("x-encrypted-param"))
+	if encryptedParam == "" {
+		return nil, fmt.Errorf("openclaw-weixin cdn upload missing x-encrypted-param")
+	}
+	return &openClawWeixinUploadedFile{
+		downloadEncryptedQueryParam: encryptedParam,
+		aesKeyBase64:                base64.StdEncoding.EncodeToString(aesKey),
+		fileSize:                    rawSize,
+		fileSizeCiphertext:          len(ciphertext),
+	}, nil
+}
+
+func (rt *workflowRuntime) sendOpenClawWeixinImage(accountID, toUserID, contextToken, text, absPath string) error {
+	uploaded, err := rt.uploadOpenClawWeixinArtifact(accountID, toUserID, absPath, openClawWeixinMediaTypeImage)
+	if err != nil {
+		return err
+	}
+	account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+	if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+		return fmt.Errorf("微信账号未配置完成：%s", accountID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(account.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = openClawWeixinDefaultBaseURL
+	}
+	items := make([]map[string]interface{}, 0, 2)
+	if strings.TrimSpace(text) != "" {
+		items = append(items, map[string]interface{}{
+			"type": openClawWeixinMessageItemText,
+			"text_item": map[string]string{
+				"text": strings.TrimSpace(text),
+			},
+		})
+	}
+	items = append(items, map[string]interface{}{
+		"type": openClawWeixinMessageItemImage,
+		"image_item": map[string]interface{}{
+			"media": map[string]interface{}{
+				"encrypt_query_param": uploaded.downloadEncryptedQueryParam,
+				"aes_key":             uploaded.aesKeyBase64,
+				"encrypt_type":        openClawWeixinMediaEncryptType,
+			},
+			"mid_size": uploaded.fileSizeCiphertext,
+		},
+	})
+	for _, item := range items {
+		payload := map[string]interface{}{
+			"msg": map[string]interface{}{
+				"from_user_id":  "",
+				"to_user_id":    toUserID,
+				"client_id":     "clawpanel-workflow-" + randomOpenClawWeixinSessionKey(),
+				"message_type":  openClawWeixinMessageTypeBot,
+				"message_state": openClawWeixinMessageStateDone,
+				"item_list":     []map[string]interface{}{item},
+			},
+		}
+		if strings.TrimSpace(contextToken) != "" {
+			payload["msg"].(map[string]interface{})["context_token"] = strings.TrimSpace(contextToken)
+		}
+		if err := rt.openClawWeixinPostJSON(baseURL, "ilink/bot/sendmessage", account.Token, payload, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rt *workflowRuntime) sendOpenClawWeixinFile(accountID, toUserID, contextToken, text, absPath, fileName string) error {
+	uploaded, err := rt.uploadOpenClawWeixinArtifact(accountID, toUserID, absPath, openClawWeixinMediaTypeFile)
+	if err != nil {
+		return err
+	}
+	account, err := loadOpenClawWeixinAccount(rt.cfg, accountID)
+	if err != nil || account == nil || strings.TrimSpace(account.Token) == "" {
+		return fmt.Errorf("微信账号未配置完成：%s", accountID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(account.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = openClawWeixinDefaultBaseURL
+	}
+	items := make([]map[string]interface{}, 0, 2)
+	if strings.TrimSpace(text) != "" {
+		items = append(items, map[string]interface{}{
+			"type": openClawWeixinMessageItemText,
+			"text_item": map[string]string{
+				"text": strings.TrimSpace(text),
+			},
+		})
+	}
+	items = append(items, map[string]interface{}{
+		"type": openClawWeixinMessageItemFile,
+		"file_item": map[string]interface{}{
+			"media": map[string]interface{}{
+				"encrypt_query_param": uploaded.downloadEncryptedQueryParam,
+				"aes_key":             uploaded.aesKeyBase64,
+				"encrypt_type":        openClawWeixinMediaEncryptType,
+			},
+			"file_name": fileName,
+			"len":       fmt.Sprintf("%d", uploaded.fileSize),
+		},
+	})
+	for _, item := range items {
+		payload := map[string]interface{}{
+			"msg": map[string]interface{}{
+				"from_user_id":  "",
+				"to_user_id":    toUserID,
+				"client_id":     "clawpanel-workflow-" + randomOpenClawWeixinSessionKey(),
+				"message_type":  openClawWeixinMessageTypeBot,
+				"message_state": openClawWeixinMessageStateDone,
+				"item_list":     []map[string]interface{}{item},
+			},
+		}
+		if strings.TrimSpace(contextToken) != "" {
+			payload["msg"].(map[string]interface{})["context_token"] = strings.TrimSpace(contextToken)
+		}
+		if err := rt.openClawWeixinPostJSON(baseURL, "ilink/bot/sendmessage", account.Token, payload, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rt *workflowRuntime) sendOpenClawWeixinArtifact(conversationID, userID, absPath, artifactName string) error {
+	accountID, targetUserID, contextToken, err := rt.resolveOpenClawWeixinTarget(conversationID, userID)
+	if err != nil {
+		return err
+	}
+	fileName := filepath.Base(strings.TrimSpace(absPath))
+	mimeType := workflowArtifactMimeType(fileName)
+	if strings.HasPrefix(mimeType, "image/") {
+		return rt.sendOpenClawWeixinImage(accountID, targetUserID, contextToken, artifactName, absPath)
+	}
+	return rt.sendOpenClawWeixinFile(accountID, targetUserID, contextToken, artifactName, absPath, fileName)
+}
+
 func workflowArtifactFileServerURL(absPath string) string {
 	absPath = strings.TrimSpace(absPath)
 	if absPath == "" {
 		return ""
 	}
 	return "http://172.17.0.1:18790/file?path=" + url.QueryEscape(absPath)
+}
+
+func workflowArtifactDeliveryChannelLabel(channelID, mode, target string) string {
+	switch strings.TrimSpace(channelID) {
+	case "qq":
+		if mode == "group" {
+			return "QQ 群聊"
+		}
+		return "QQ 私聊"
+	case "openclaw-weixin":
+		if strings.TrimSpace(target) != "" {
+			return fmt.Sprintf("微信（ClawBot）%s", strings.TrimSpace(target))
+		}
+		return "微信（ClawBot）"
+	case "wecom":
+		return "企业微信"
+	case "feishu":
+		return "飞书"
+	default:
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			channelID = "未知通道"
+		}
+		if target != "" {
+			return fmt.Sprintf("%s %s", channelID, strings.TrimSpace(target))
+		}
+		return channelID
+	}
 }
 
 func qqPrivateTargetUserID(userID, conversationID string) string {
@@ -1040,7 +1355,31 @@ func selectedArtifactsForDelivery(run *model.WorkflowRun) []map[string]interface
 	return selected
 }
 
-func (rt *workflowRuntime) updateArtifactDeliveryState(run *model.WorkflowRun, selected []map[string]interface{}, sent []string, failed []string, mode, target string) {
+func stepArtifactsForDelivery(run *model.WorkflowRun, step *model.WorkflowStep) []map[string]interface{} {
+	if run == nil || run.Context == nil || step == nil {
+		return nil
+	}
+	selected := make([]map[string]interface{}, 0, 1)
+	for _, item := range toArtifactSlice(run.Context["artifactFiles"]) {
+		if strings.TrimSpace(toStringLocal(item["stepKey"])) != strings.TrimSpace(step.StepKey) {
+			continue
+		}
+		if toBoolLocal(item["sendToUser"]) {
+			selected = append(selected, item)
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	for _, item := range toArtifactSlice(run.Context["artifactFiles"]) {
+		if strings.TrimSpace(toStringLocal(item["stepKey"])) == strings.TrimSpace(step.StepKey) {
+			selected = append(selected, item)
+		}
+	}
+	return selected
+}
+
+func (rt *workflowRuntime) updateArtifactDeliveryState(run *model.WorkflowRun, selected []map[string]interface{}, sent []string, failed []string, channelID, mode, target string) {
 	if run == nil {
 		return
 	}
@@ -1076,7 +1415,7 @@ func (rt *workflowRuntime) updateArtifactDeliveryState(run *model.WorkflowRun, s
 		if name == "" {
 			name = strings.TrimSpace(toStringLocal(record["fileName"]))
 		}
-		record["deliveryChannel"] = "qq"
+		record["deliveryChannel"] = channelID
 		record["deliveryMode"] = mode
 		record["deliveryTarget"] = target
 		record["deliveryUpdatedAt"] = now
@@ -1113,7 +1452,7 @@ func (rt *workflowRuntime) updateArtifactDeliveryState(run *model.WorkflowRun, s
 		}
 	}
 	run.Context["artifactDeliveryStatus"] = status
-	run.Context["artifactDeliveryChannel"] = "qq"
+	run.Context["artifactDeliveryChannel"] = channelID
 	run.Context["artifactDeliveryMode"] = mode
 	run.Context["artifactDeliveryTarget"] = target
 	run.Context["artifactDeliveryUpdatedAt"] = now
@@ -1122,11 +1461,8 @@ func (rt *workflowRuntime) updateArtifactDeliveryState(run *model.WorkflowRun, s
 	_ = model.UpdateWorkflowRun(rt.db, run)
 }
 
-func renderArtifactDeliveryNotice(run *model.WorkflowRun, sent []string, failed []string, mode string) string {
-	targetLabel := "QQ 私聊"
-	if mode == "group" {
-		targetLabel = "QQ 群聊"
-	}
+func renderArtifactDeliveryNotice(run *model.WorkflowRun, sent []string, failed []string, channelID, mode, target string) string {
+	targetLabel := workflowArtifactDeliveryChannelLabel(channelID, mode, target)
 	runLabel := "工作流"
 	if run != nil {
 		name := strings.TrimSpace(run.Name)
@@ -1161,6 +1497,12 @@ func (rt *workflowRuntime) resolveArtifactDeliveryTarget(run *model.WorkflowRun)
 	if userID := qqPrivateTargetUserID(run.UserID, run.ConversationID); userID != "" {
 		return "private", userID
 	}
+	if strings.TrimSpace(run.ChannelID) == "openclaw-weixin" {
+		accountID, targetUserID, _, err := rt.resolveOpenClawWeixinTarget(run.ConversationID, run.UserID)
+		if err == nil && accountID != "" && targetUserID != "" {
+			return "direct", fmt.Sprintf("%s/%s", accountID, targetUserID)
+		}
+	}
 	return "", ""
 }
 
@@ -1168,15 +1510,12 @@ func (rt *workflowRuntime) sendArtifactsToOrigin(run *model.WorkflowRun, selecte
 	if run == nil || run.Context == nil {
 		return run, nil, nil, fmt.Errorf("workflow run not found")
 	}
-	if strings.TrimSpace(run.ChannelID) != "qq" {
-		return run, nil, nil, fmt.Errorf("channel not supported for artifact delivery")
-	}
 	if len(selected) == 0 {
 		return run, nil, nil, fmt.Errorf("no artifacts selected")
 	}
 	targetMode, targetID := rt.resolveArtifactDeliveryTarget(run)
 	if targetMode == "" || targetID == "" {
-		return run, nil, nil, fmt.Errorf("missing QQ delivery target")
+		return run, nil, nil, fmt.Errorf("missing artifact delivery target")
 	}
 	sent := make([]string, 0, len(selected))
 	failed := make([]string, 0)
@@ -1188,10 +1527,17 @@ func (rt *workflowRuntime) sendArtifactsToOrigin(run *model.WorkflowRun, selecte
 			name = fileName
 		}
 		var err error
-		if targetMode == "group" {
-			err = rt.sendQQGroupArtifact(targetID, absPath, fileName)
-		} else {
-			err = rt.sendQQPrivateArtifact(targetID, absPath, fileName)
+		switch strings.TrimSpace(run.ChannelID) {
+		case "qq":
+			if targetMode == "group" {
+				err = rt.sendQQGroupArtifact(targetID, absPath, fileName)
+			} else {
+				err = rt.sendQQPrivateArtifact(targetID, absPath, fileName)
+			}
+		case "openclaw-weixin":
+			err = rt.sendOpenClawWeixinArtifact(run.ConversationID, run.UserID, absPath, name)
+		default:
+			err = fmt.Errorf("channel not supported for artifact delivery: %s", run.ChannelID)
 		}
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("%s: %v", name, err))
@@ -1199,23 +1545,20 @@ func (rt *workflowRuntime) sendArtifactsToOrigin(run *model.WorkflowRun, selecte
 		}
 		sent = append(sent, name)
 	}
-	rt.updateArtifactDeliveryState(run, selected, sent, failed, targetMode, targetID)
+	rt.updateArtifactDeliveryState(run, selected, sent, failed, strings.TrimSpace(run.ChannelID), targetMode, targetID)
 	updated, _ := model.GetWorkflowRun(rt.db, run.ID)
 	if updated == nil {
 		updated = run
 	}
 	if len(sent) > 0 {
-		targetLabel := "QQ 私聊"
-		if targetMode == "group" {
-			targetLabel = "QQ 群聊"
-		}
+		targetLabel := workflowArtifactDeliveryChannelLabel(strings.TrimSpace(run.ChannelID), targetMode, targetID)
 		rt.logWorkflowActivity(updated, "workflow.artifact.sent", fmt.Sprintf("工作流 %s %s 已向 %s 回传 %d 个文件", updated.Name, updated.ShortID, targetLabel, len(sent)), strings.Join(sent, "\n"))
 	}
 	if len(failed) > 0 {
 		rt.logWorkflowActivity(updated, "workflow.artifact.send_failed", fmt.Sprintf("工作流 %s %s 有 %d 个文件回传失败", updated.Name, updated.ShortID, len(failed)), strings.Join(failed, "\n"))
 	}
 	if sendNotice {
-		if notice := renderArtifactDeliveryNotice(updated, sent, failed, targetMode); notice != "" {
+		if notice := renderArtifactDeliveryNotice(updated, sent, failed, strings.TrimSpace(run.ChannelID), targetMode, targetID); notice != "" {
 			if err := rt.sendWorkflowAck(updated.ChannelID, updated.ConversationID, updated.UserID, notice); err != nil {
 				rt.logWorkflowActivity(updated, "workflow.artifact.notice_failed", fmt.Sprintf("工作流 %s %s 文件回传提示发送失败", updated.Name, updated.ShortID), err.Error())
 			} else {
@@ -1230,7 +1573,9 @@ func (rt *workflowRuntime) deliverFinalArtifactsToOrigin(run *model.WorkflowRun)
 	if run == nil || run.Context == nil {
 		return
 	}
-	if strings.TrimSpace(run.ChannelID) != "qq" {
+	switch strings.TrimSpace(run.ChannelID) {
+	case "qq", "openclaw-weixin":
+	default:
 		return
 	}
 	selected := selectedArtifactsForDelivery(run)
@@ -1238,6 +1583,17 @@ func (rt *workflowRuntime) deliverFinalArtifactsToOrigin(run *model.WorkflowRun)
 		return
 	}
 	_, _, _, _ = rt.sendArtifactsToOrigin(run, selected, true)
+}
+
+func (rt *workflowRuntime) deliverStepArtifactsToOrigin(run *model.WorkflowRun, step *model.WorkflowStep, sendNotice bool) {
+	if run == nil || step == nil {
+		return
+	}
+	selected := stepArtifactsForDelivery(run, step)
+	if len(selected) == 0 {
+		return
+	}
+	_, _, _, _ = rt.sendArtifactsToOrigin(run, selected, sendNotice)
 }
 
 func (rt *workflowRuntime) sendWecomText(responseURL, text string) error {
@@ -1548,6 +1904,17 @@ func sanitizeArtifactFileName(name string) string {
 	return name
 }
 
+func workflowArtifactMimeType(fileName string) string {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return "application/octet-stream"
+	}
+	if mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(fileName))); strings.TrimSpace(mimeType) != "" {
+		return mimeType
+	}
+	return "application/octet-stream"
+}
+
 func defaultArtifactFileName(step *model.WorkflowStep) string {
 	ext := ".md"
 	if format := strings.ToLower(strings.TrimSpace(toStringLocal(step.Input["outputFormat"]))); format == "json" {
@@ -1593,6 +1960,9 @@ func stepShouldPersistArtifact(step *model.WorkflowStep) bool {
 	if step == nil {
 		return false
 	}
+	if step.StepType == "image_generate" {
+		return false
+	}
 	switch raw := rawOutputFileSetting(step).(type) {
 	case bool:
 		return raw
@@ -1607,6 +1977,42 @@ func stepShouldPersistArtifact(step *model.WorkflowStep) bool {
 	default:
 		return false
 	}
+}
+
+func (rt *workflowRuntime) upsertArtifactRecord(run *model.WorkflowRun, step *model.WorkflowStep, record map[string]interface{}) error {
+	if run == nil || step == nil {
+		return nil
+	}
+	if run.Context == nil {
+		run.Context = map[string]interface{}{}
+	}
+	files := toArtifactSlice(run.Context["artifactFiles"])
+	replaced := false
+	for i := range files {
+		if strings.TrimSpace(toStringLocal(files[i]["stepKey"])) == step.StepKey {
+			files[i] = record
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		files = append(files, record)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return strings.TrimSpace(toStringLocal(files[i]["fileName"])) < strings.TrimSpace(toStringLocal(files[j]["fileName"]))
+	})
+	run.Context["artifactFiles"] = files
+	finalFiles := make([]map[string]interface{}, 0)
+	for _, item := range files {
+		if toBoolLocal(item["isFinalOutput"]) {
+			finalFiles = append(finalFiles, item)
+		}
+	}
+	if len(finalFiles) == 0 && len(files) > 0 {
+		finalFiles = append(finalFiles, files[len(files)-1])
+	}
+	run.Context["finalFiles"] = finalFiles
+	return model.UpdateWorkflowRun(rt.db, run)
 }
 
 func (rt *workflowRuntime) persistStepArtifact(run *model.WorkflowRun, step *model.WorkflowStep) error {
@@ -1644,44 +2050,64 @@ func (rt *workflowRuntime) persistStepArtifact(run *model.WorkflowRun, step *mod
 		artifactName = step.Title
 	}
 	relPath := filepath.ToSlash(filepath.Join(relDir, fileName))
-	record := map[string]interface{}{
+	return rt.upsertArtifactRecord(run, step, map[string]interface{}{
 		"stepKey":       step.StepKey,
 		"title":         step.Title,
 		"artifactName":  artifactName,
 		"fileName":      fileName,
 		"relativePath":  relPath,
 		"absolutePath":  absPath,
+		"mimeType":      workflowArtifactMimeType(fileName),
 		"isFinalOutput": toBoolLocal(step.Input["isFinalOutput"]),
 		"sendToUser":    toBoolLocal(step.Input["sendToUser"]),
 		"updatedAt":     time.Now().UnixMilli(),
-	}
-	files := toArtifactSlice(run.Context["artifactFiles"])
-	replaced := false
-	for i := range files {
-		if strings.TrimSpace(toStringLocal(files[i]["stepKey"])) == step.StepKey {
-			files[i] = record
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		files = append(files, record)
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return strings.TrimSpace(toStringLocal(files[i]["fileName"])) < strings.TrimSpace(toStringLocal(files[j]["fileName"]))
 	})
-	run.Context["artifactFiles"] = files
-	finalFiles := make([]map[string]interface{}, 0)
-	for _, item := range files {
-		if toBoolLocal(item["isFinalOutput"]) {
-			finalFiles = append(finalFiles, item)
+}
+
+func (rt *workflowRuntime) persistBinaryArtifact(run *model.WorkflowRun, step *model.WorkflowStep, artifact workflowBinaryArtifactRecord) error {
+	if run == nil || step == nil {
+		return nil
+	}
+	if run.Context == nil {
+		run.Context = map[string]interface{}{}
+	}
+	dir := strings.TrimSpace(toStringLocal(run.Context["workflowDir"]))
+	relDir := strings.TrimSpace(toStringLocal(run.Context["workflowDirRelative"]))
+	if dir == "" {
+		var err error
+		dir, relDir, err = rt.ensureWorkflowRunDir(run.ChannelID, run.UserID, run.ShortID)
+		if err != nil {
+			return err
 		}
+		run.Context["workflowDir"] = dir
+		run.Context["workflowDirRelative"] = relDir
 	}
-	if len(finalFiles) == 0 && len(files) > 0 {
-		finalFiles = append(finalFiles, files[len(files)-1])
+	fileName := sanitizeArtifactFileName(artifact.FileName)
+	absPath := strings.TrimSpace(artifact.AbsolutePath)
+	if fileName == "" || absPath == "" {
+		return fmt.Errorf("binary artifact path missing")
 	}
-	run.Context["finalFiles"] = finalFiles
-	return model.UpdateWorkflowRun(rt.db, run)
+	artifactName := strings.TrimSpace(artifact.ArtifactName)
+	if artifactName == "" {
+		artifactName = step.Title
+	}
+	mimeType := strings.TrimSpace(artifact.MimeType)
+	if mimeType == "" {
+		mimeType = workflowArtifactMimeType(fileName)
+	}
+	relPath := filepath.ToSlash(filepath.Join(relDir, fileName))
+	return rt.upsertArtifactRecord(run, step, map[string]interface{}{
+		"stepKey":       step.StepKey,
+		"title":         step.Title,
+		"artifactName":  artifactName,
+		"fileName":      fileName,
+		"relativePath":  relPath,
+		"absolutePath":  absPath,
+		"mimeType":      mimeType,
+		"isFinalOutput": toBoolLocal(step.Input["isFinalOutput"]),
+		"sendToUser":    toBoolLocal(step.Input["sendToUser"]),
+		"updatedAt":     time.Now().UnixMilli(),
+	})
 }
 
 func toArtifactSlice(v interface{}) []map[string]interface{} {
@@ -1804,6 +2230,29 @@ func (rt *workflowRuntime) executeRun(runID string) {
 			step.Status = "completed"
 			step.OutputText = "Workflow completed"
 			_ = model.UpdateWorkflowStep(rt.db, &step)
+		case "image_generate":
+			result, imageErr := rt.executeImageStep(run, &step)
+			if imageErr != nil {
+				step.Status = "failed"
+				step.ErrorText = imageErr.Error()
+				_ = model.UpdateWorkflowStep(rt.db, &step)
+				run.Status = "waiting_for_user"
+				run.LastMessage = rt.generateFailureMessage(run, &step, imageErr)
+				_ = model.UpdateWorkflowRun(rt.db, run)
+				_ = model.AddWorkflowEvent(rt.db, &model.WorkflowEvent{RunID: run.ID, StepID: step.ID, EventType: "failed", Message: run.LastMessage, Payload: map[string]interface{}{"error": imageErr.Error()}})
+				rt.logWorkflowActivity(run, "workflow.step.failed", fmt.Sprintf("工作流 %s %s 步骤失败：%s", run.Name, run.ShortID, step.Title), imageErr.Error())
+				rt.broadcastWorkflowTaskUpdate(run)
+				rt.broadcastWorkflowTaskLog(run.ID, run.LastMessage)
+				rt.broadcastWorkflowTaskLog(run.ID, fmt.Sprintf("❌ %s", imageErr.Error()))
+				rt.pushRunMessageToOrigin(run, "failed", run.LastMessage)
+				return
+			}
+			step.Status = "completed"
+			step.OutputText = result
+			_ = model.UpdateWorkflowStep(rt.db, &step)
+			if artifacts, ok := run.Context["artifacts"].(map[string]interface{}); ok {
+				artifacts[step.StepKey] = result
+			}
 		default:
 			result, aiErr := rt.executeAIStep(run, &step)
 			if aiErr != nil {
@@ -1829,6 +2278,17 @@ func (rt *workflowRuntime) executeRun(runID string) {
 			}
 		}
 		_ = rt.persistStepArtifact(run, &step)
+		run, _ = model.GetWorkflowRun(rt.db, run.ID)
+		if run == nil {
+			return
+		}
+		if step.StepType == "image_generate" {
+			rt.deliverStepArtifactsToOrigin(run, &step, false)
+			run, _ = model.GetWorkflowRun(rt.db, run.ID)
+			if run == nil {
+				return
+			}
+		}
 		progressMsg = rt.generateProgressMessage(run, &step, "completed")
 		run.LastMessage = progressMsg
 		_ = model.UpdateWorkflowRun(rt.db, run)
@@ -1837,7 +2297,6 @@ func (rt *workflowRuntime) executeRun(runID string) {
 		rt.broadcastWorkflowTaskUpdate(run)
 		rt.broadcastWorkflowTaskLog(run.ID, progressMsg)
 		rt.pushRunMessageToOrigin(run, "progress", progressMsg)
-		run, _ = model.GetWorkflowRun(rt.db, run.ID)
 	}
 	run.Status = "completed"
 	run.LastMessage = rt.generateRunCompletionMessage(run)
@@ -2024,6 +2483,202 @@ func (rt *workflowRuntime) executeAIStep(run *model.WorkflowRun, step *model.Wor
 		return "", err
 	}
 	return strings.TrimSpace(text), nil
+}
+
+func workflowStepArtifactText(run *model.WorkflowRun, stepKey string) string {
+	stepKey = strings.TrimSpace(stepKey)
+	if run == nil || stepKey == "" || run.Context == nil {
+		return ""
+	}
+	if artifacts, ok := run.Context["artifacts"].(map[string]interface{}); ok {
+		if raw, ok := artifacts[stepKey]; ok {
+			return strings.TrimSpace(toStringLocal(raw))
+		}
+	}
+	for _, step := range run.Steps {
+		if strings.TrimSpace(step.StepKey) == stepKey {
+			return strings.TrimSpace(step.OutputText)
+		}
+	}
+	return ""
+}
+
+func extractImagePromptFromText(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if match := regexp.MustCompile(`(?s)<<POSTER_IMAGE_PROMPT>>(.*?)<<END_POSTER_IMAGE_PROMPT>>`).FindStringSubmatch(raw); len(match) == 2 {
+		return strings.TrimSpace(match[1])
+	}
+	lines := strings.Split(raw, "\n")
+	capture := false
+	parts := make([]string, 0)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" && capture {
+			parts = append(parts, "")
+			continue
+		}
+		if strings.Contains(trimmed, "海报设计提示词") || strings.Contains(trimmed, "图片生成提示词") || strings.Contains(trimmed, "Image Prompt") {
+			capture = true
+			continue
+		}
+		if capture && (strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "##") || strings.HasPrefix(trimmed, "###")) {
+			break
+		}
+		if capture {
+			parts = append(parts, line)
+		}
+	}
+	if prompt := strings.TrimSpace(strings.Join(parts, "\n")); prompt != "" {
+		prompt = strings.Trim(prompt, "`")
+		return strings.TrimSpace(prompt)
+	}
+	if blocks := regexp.MustCompile("(?s)```(?:text|prompt)?\\s*(.*?)```").FindAllStringSubmatch(raw, -1); len(blocks) > 0 {
+		last := strings.TrimSpace(blocks[len(blocks)-1][1])
+		if last != "" {
+			return last
+		}
+	}
+	return raw
+}
+
+func resolveWorkflowImageScriptPath(cfg *config.Config, step *model.WorkflowStep) string {
+	if step != nil && step.Input != nil {
+		if path := strings.TrimSpace(toStringLocal(step.Input["scriptPath"])); path != "" {
+			return path
+		}
+	}
+	candidates := []string{
+		filepath.Join(cfg.OpenClawDir, "skills", "poster-gemini-image", "scripts", "generate_image.py"),
+		filepath.Join(cfg.OpenClawWork, "skills", "poster-gemini-image", "scripts", "generate_image.py"),
+		filepath.Join(cfg.OpenClawApp, "skills", "poster-gemini-image", "scripts", "generate_image.py"),
+	}
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return candidates[0]
+}
+
+func (rt *workflowRuntime) workflowImageProviderConfig(step *model.WorkflowStep) (string, string, string, error) {
+	baseURL := ""
+	apiKey := ""
+	model := "gemini-2.5-flash-image"
+	providerID := "chipcloud"
+	if step != nil && step.Input != nil {
+		if value := strings.TrimSpace(toStringLocal(step.Input["baseUrl"])); value != "" {
+			baseURL = value
+		}
+		if value := strings.TrimSpace(toStringLocal(step.Input["apiKey"])); value != "" {
+			apiKey = value
+		}
+		if value := strings.TrimSpace(toStringLocal(step.Input["model"])); value != "" {
+			model = value
+		}
+		if value := strings.TrimSpace(toStringLocal(step.Input["providerId"])); value != "" {
+			providerID = value
+		}
+	}
+	if baseURL != "" && apiKey != "" {
+		return baseURL, apiKey, model, nil
+	}
+	ocConfig, err := rt.cfg.ReadOpenClawJSON()
+	if err != nil {
+		return "", "", "", err
+	}
+	providers := asMapAny(asMapAny(ocConfig["models"])["providers"])
+	provider := asMapAny(providers[providerID])
+	if provider == nil {
+		return "", "", "", fmt.Errorf("workflow image provider not found: %s", providerID)
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(toStringLocal(provider["baseUrl"]))
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(toStringLocal(provider["apiKey"]))
+	}
+	if baseURL == "" || apiKey == "" {
+		return "", "", "", fmt.Errorf("workflow image provider incomplete: %s", providerID)
+	}
+	return baseURL, apiKey, model, nil
+}
+
+func (rt *workflowRuntime) executeImageStep(run *model.WorkflowRun, step *model.WorkflowStep) (string, error) {
+	if run == nil || step == nil {
+		return "", fmt.Errorf("workflow image step missing context")
+	}
+	prompt := strings.TrimSpace(toStringLocal(step.Input["prompt"]))
+	if prompt == "" {
+		sourceStepKey := strings.TrimSpace(toStringLocal(step.Input["promptStepKey"]))
+		if sourceStepKey == "" {
+			sourceStepKey = "poster_copy"
+		}
+		prompt = extractImagePromptFromText(workflowStepArtifactText(run, sourceStepKey))
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("workflow image prompt missing")
+	}
+	baseURL, apiKey, model, err := rt.workflowImageProviderConfig(step)
+	if err != nil {
+		return "", err
+	}
+	scriptPath := resolveWorkflowImageScriptPath(rt.cfg, step)
+	if info, statErr := os.Stat(scriptPath); statErr != nil || info.IsDir() {
+		return "", fmt.Errorf("workflow image script not found: %s", scriptPath)
+	}
+	dir := strings.TrimSpace(toStringLocal(run.Context["workflowDir"]))
+	if dir == "" {
+		var relDir string
+		dir, relDir, err = rt.ensureWorkflowRunDir(run.ChannelID, run.UserID, run.ShortID)
+		if err != nil {
+			return "", err
+		}
+		run.Context["workflowDir"] = dir
+		run.Context["workflowDirRelative"] = relDir
+	}
+	outputFile := explicitArtifactFileName(step)
+	if outputFile == "" {
+		outputFile = fmt.Sprintf("%02d-%s.png", step.OrderIndex+1, sanitizeWorkflowPathSegment(step.Title, step.StepKey))
+	}
+	outputFile = sanitizeArtifactFileName(outputFile)
+	if ext := strings.ToLower(filepath.Ext(outputFile)); ext == "" {
+		outputFile += ".png"
+	}
+	absOutputPath := filepath.Join(dir, outputFile)
+	cmd := exec.Command("python3",
+		scriptPath,
+		"--prompt", prompt,
+		"--output", absOutputPath,
+		"--base-url", baseURL,
+		"--api-key", apiKey,
+		"--model", model,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("image generator failed: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	if _, err := os.Stat(absOutputPath); err != nil {
+		return "", fmt.Errorf("image output missing: %w", err)
+	}
+	artifactName := strings.TrimSpace(toStringLocal(step.Input["artifactName"]))
+	if artifactName == "" {
+		artifactName = step.Title
+	}
+	if err := rt.persistBinaryArtifact(run, step, workflowBinaryArtifactRecord{
+		AbsolutePath: absOutputPath,
+		FileName:     outputFile,
+		ArtifactName: artifactName,
+		MimeType:     workflowArtifactMimeType(outputFile),
+	}); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(fmt.Sprintf("已生成海报图片。\n- 模型：%s\n- 文件：%s\n- 提示词：\n%s", model, filepath.ToSlash(filepath.Join(strings.TrimSpace(toStringLocal(run.Context["workflowDirRelative"])), outputFile)), prompt)), nil
 }
 
 func (rt *workflowRuntime) fallbackAIStep(run *model.WorkflowRun, step *model.WorkflowStep) (string, bool) {

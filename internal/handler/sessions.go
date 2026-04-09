@@ -292,6 +292,10 @@ func extractMessage(entry map[string]interface{}) map[string]interface{} {
 	}
 
 	role, _ := msg["role"].(string)
+	role = strings.TrimSpace(role)
+	if role != "user" && role != "system" {
+		return nil
+	}
 	content := cleanSessionMessageText(extractTextContent(msg["content"]), role)
 	ts, _ := entry["timestamp"].(string)
 
@@ -360,6 +364,9 @@ func cleanSessionMessageText(content, role string) string {
 	if text == "" {
 		return ""
 	}
+	if attachment := extractSessionAttachmentLabel(text); attachment != "" {
+		return attachment
+	}
 	if role == "assistant" {
 		text = strings.TrimPrefix(text, "[[reply_to_current]]")
 		text = strings.TrimPrefix(text, "[[reply_to_parent]]")
@@ -386,12 +393,23 @@ func cleanSessionMessageText(content, role string) string {
 			}
 		}
 	}
+	if looksLikeSessionBinaryNoise(text) {
+		return ""
+	}
 
 	lines := strings.Split(text, "\n")
 	filtered := make([]string, 0, len(lines))
+	skipFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "```") {
+			skipFence = !skipFence
+			continue
+		}
+		if skipFence {
 			continue
 		}
 		if looksLikeSessionInstructionLine(trimmed) {
@@ -400,7 +418,7 @@ func cleanSessionMessageText(content, role string) string {
 		filtered = append(filtered, trimmed)
 	}
 	if len(filtered) == 0 {
-		return strings.TrimSpace(text)
+		return ""
 	}
 
 	start := len(filtered) - 1
@@ -415,6 +433,47 @@ func cleanSessionMessageText(content, role string) string {
 	return strings.TrimSpace(strings.Join(filtered[start:], "\n"))
 }
 
+func extractSessionAttachmentLabel(text string) string {
+	const marker = "[media attached:"
+	idx := strings.Index(strings.ToLower(text), marker)
+	if idx < 0 {
+		return ""
+	}
+	segment := text[idx+len(marker):]
+	end := strings.Index(segment, "]")
+	if end >= 0 {
+		segment = segment[:end]
+	}
+	segment = strings.TrimSpace(segment)
+	if segment == "" {
+		return "附件"
+	}
+	if paren := strings.Index(segment, " ("); paren >= 0 {
+		segment = strings.TrimSpace(segment[:paren])
+	}
+	segment = filepath.Base(segment)
+	if segment == "." || segment == "/" || segment == "" {
+		return "附件"
+	}
+	return "附件：" + segment
+}
+
+func looksLikeSessionBinaryNoise(text string) bool {
+	if text == "" {
+		return false
+	}
+	nonPrintable := 0
+	for _, r := range text {
+		if r == '\n' || r == '\r' || r == '\t' {
+			continue
+		}
+		if r < 32 || r == 0xfffd {
+			nonPrintable++
+		}
+	}
+	return nonPrintable > 8 || strings.Contains(text, "END_EXTERNAL_UNTRUSTED_CONTENT")
+}
+
 func looksLikeSessionInstructionLine(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	if lower == "```" || strings.HasPrefix(lower, "{") || strings.HasPrefix(lower, "}") {
@@ -422,6 +481,17 @@ func looksLikeSessionInstructionLine(line string) bool {
 	}
 	prefixes := []string{
 		"conversation info",
+		"system (untrusted):",
+		"system:",
+		"when reading heartbeat.md",
+		"[media attached:",
+		"to send an image back, prefer the message tool",
+		"avoid absolute paths",
+		"keep caption in the text body.",
+		"<<<end_external_untrusted_content",
+		"<</file",
+		"read heartbeat.md",
+		"current time:",
 		"你正在通过",
 		"【会话上下文】",
 		"- 用户:",

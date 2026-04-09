@@ -460,6 +460,7 @@ function sourceColor(s: string) {
     case 'wechat': return 'bg-emerald-100/90 border-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:border-emerald-800/40 dark:text-emerald-300';
     case 'system': return 'bg-slate-100/90 border-slate-200 text-slate-700 dark:bg-slate-800/70 dark:border-slate-700 dark:text-slate-300';
     case 'openclaw': return 'bg-sky-100/90 border-sky-100 text-sky-700 dark:bg-sky-900/25 dark:border-sky-800/40 dark:text-sky-300';
+    case 'workflow': return 'bg-amber-100/90 border-amber-100 text-amber-700 dark:bg-amber-900/25 dark:border-amber-800/40 dark:text-amber-300';
     default: return 'bg-slate-100/90 border-slate-200 text-slate-600';
   }
 }
@@ -477,6 +478,7 @@ function sourceLabel(s: string) {
     case 'wechat': return 'WeChat';
     case 'system': return 'SYS';
     case 'openclaw': return 'Bot';
+    case 'workflow': return 'Flow';
     default: return s;
   }
 }
@@ -491,12 +493,29 @@ function shortenModel(m: string) {
 
 function formatLogTime(ts: number) {
   const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const now = new Date();
-  const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '00';
+  const nowParts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const isToday = get('year') === (nowParts.find((part) => part.type === 'year')?.value || '') &&
+    get('month') === (nowParts.find((part) => part.type === 'month')?.value || '') &&
+    get('day') === (nowParts.find((part) => part.type === 'day')?.value || '');
+  const time = `${get('hour')}:${get('minute')}:${get('second')}`;
   if (isToday) return time;
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+  return `${get('year')}-${get('month')}-${get('day')} ${time}`;
 }
 
 function formatUptime(s: number, t: any) {

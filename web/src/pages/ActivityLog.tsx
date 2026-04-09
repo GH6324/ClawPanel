@@ -455,14 +455,22 @@ function formatTimestamp(ts?: string) {
   if (!ts) return '-';
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', month: '2-digit', day: '2-digit' });
+  return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', second: '2-digit', month: '2-digit', day: '2-digit' });
 }
 
 function formatLogTime(ts: number) {
   if (!ts) return '-';
   const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '00';
+  return `${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
 }
 
 export default memo(ActivityLogPage);
