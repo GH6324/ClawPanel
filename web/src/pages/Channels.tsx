@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { api } from '../lib/api';
-import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle, Trash2 } from 'lucide-react';
+import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle, Trash2, ChevronDown } from 'lucide-react';
 import InfoTooltip from '../components/InfoTooltip';
 import { useI18n } from '../i18n';
 
@@ -346,6 +346,20 @@ const FEISHU_FIELD_SECTIONS: Record<Exclude<ChannelFieldSection, 'default'>, { t
   },
 };
 
+const QQBOT_PRIMARY_FIELDS = new Set(['appId', 'clientSecret', 'appSecret']);
+const CHANNEL_UNSELECTED_ID = '__none__';
+const QQBOT_ADVANCED_FIELD_HELP: Record<string, string> = {
+  allowFrom: '可选。限制允许触发机器人的用户 ID，支持英文逗号、中文逗号或换行分隔。',
+  clientSecretFile: '可选。App Secret 文件路径，通常仅在密钥文件托管场景使用。',
+  defaultAccount: '可选。默认账号标识，多账号路由时用于兜底匹配。',
+  enabled: '开关当前 QQ 官方机器人通道。',
+  name: '可选。面板中的显示名称，不影响 QQ 开放平台实际配置。',
+  systemPrompt: '可选。为该通道覆盖默认系统提示词。',
+  upgradeMode: '可选。升级/兼容模式，通常保持默认。',
+  upgradeUrl: '可选。升级资源地址，通常无需填写。',
+  voiceDirectUploadFormats: '可选。语音直传格式白名单，支持英文逗号、中文逗号或换行分隔。',
+};
+
 function humanizeChannelFieldKey(raw: string): string {
   const leaf = raw.split('.').pop() || raw;
   return leaf
@@ -431,7 +445,14 @@ function mergeChannelDefs(defaultDefs: ChannelDef[], catalogItems: ChannelCatalo
     if (existing) {
       const seen = new Set(existing.configFields.map(field => field.key));
       dynamicFields.forEach(field => {
-        if (!seen.has(field.key)) existing.configFields.push(field);
+        const nextField = { ...field };
+        if (item.id === 'qqbot' && !QQBOT_PRIMARY_FIELDS.has(nextField.key)) {
+          nextField.section = 'advanced';
+          if (!nextField.help && QQBOT_ADVANCED_FIELD_HELP[nextField.key]) {
+            nextField.help = QQBOT_ADVANCED_FIELD_HELP[nextField.key];
+          }
+        }
+        if (!seen.has(nextField.key)) existing.configFields.push(nextField);
       });
       existing.label = existing.label || item.label || item.id;
       existing.description = existing.description || item.description || '';
@@ -798,7 +819,7 @@ export default function Channels() {
 
   const [status, setStatus] = useState<any>(null);
   const [channelDefs, setChannelDefs] = useState<ChannelDef[]>(DEFAULT_CHANNEL_DEFS);
-  const [selectedChannel, setSelectedChannel] = useState('');
+  const [selectedChannel, setSelectedChannel] = useState(CHANNEL_UNSELECTED_ID);
   const [ocConfig, setOcConfig] = useState<any>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -835,6 +856,7 @@ export default function Channels() {
   const [approvingPairingCode, setApprovingPairingCode] = useState('');
   const [channelDrafts, setChannelDrafts] = useState<Record<string, any>>({});
   const [channelFieldTextDrafts, setChannelFieldTextDrafts] = useState<Record<string, string>>({});
+  const [qqbotAdvancedOpen, setQqbotAdvancedOpen] = useState(false);
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
   const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
   const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
@@ -1131,6 +1153,9 @@ export default function Channels() {
   useEffect(() => {
     if (selectedChannel === 'feishu') syncFeishuUiState(ocConfig);
   }, [selectedChannel, syncFeishuUiState]);
+  useEffect(() => {
+    if (selectedChannel !== 'qqbot') setQqbotAdvancedOpen(false);
+  }, [selectedChannel]);
   useEffect(() => {
     const queryChannel = normalizeChannelQuery(searchParams.get('channel'));
     if (!queryChannel) return;
@@ -1461,7 +1486,13 @@ export default function Channels() {
     return ocChannels[channelId]?.enabled || ocPlugins[channelId]?.enabled || false;
   };
 
-  const currentDef = channelDefs.find(c => c.id === selectedChannel);
+  const currentDef = selectedChannel === CHANNEL_UNSELECTED_ID ? undefined : channelDefs.find(c => c.id === selectedChannel);
+  const qqbotPrimaryFields = currentDef?.id === 'qqbot'
+    ? currentDef.configFields.filter(field => field.key === 'appId' || field.key === 'clientSecret')
+    : [];
+  const qqbotAdvancedFields = currentDef?.id === 'qqbot'
+    ? currentDef.configFields.filter(field => field.key !== 'appId' && field.key !== 'clientSecret')
+    : [];
   const currentLoginChannelId = loginChannelId || currentDef?.id || '';
   const currentLoginChannel = channelDefs.find(channel => channel.id === currentLoginChannelId) || currentDef;
   const openClawWeixinAccounts = Array.isArray(openClawWeixinStatus?.accounts) ? openClawWeixinStatus.accounts : [];
@@ -1951,7 +1982,7 @@ export default function Channels() {
       : field.options;
     const fieldHelp = channelId === 'feishu' && field.key === 'requireMention'
       ? currentFeishuRequireMentionHelp
-      : field.help;
+      : (field.help || (channelId === 'qqbot' ? QQBOT_ADVANCED_FIELD_HELP[field.key] : ''));
     const currentVal = channelId === 'feishu' && field.key === 'requireMention'
       ? currentFeishuRequireMentionValue
       : rawCurrentVal;
@@ -2166,6 +2197,20 @@ export default function Channels() {
 
         {/* Channel config */}
         <div className="lg:col-span-3 space-y-6">
+          {!currentDef && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-10 md:p-14">
+              <div className="mx-auto max-w-xl text-center space-y-4">
+                <div className="mx-auto w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/40 text-blue-500 flex items-center justify-center">
+                  <Radio size={24} />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">请选择左侧通道开始配置</h3>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  这里会显示对应通道的连接状态、登录入口和参数配置。建议先配置基础凭证，再按需展开高级选项。
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* QQ plugin not installed overlay */}
           {currentDef && currentDef.id === 'qq' && !isQQActuallyInstalled(installedPlugins, qqChannelState) && (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center space-y-4">
@@ -3261,7 +3306,7 @@ export default function Channels() {
 
               <form
                 id="channel-config-form"
-                className={currentDef.id === 'feishu' || currentDef.id === 'wecom' ? 'space-y-4' : 'grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5'}
+                className={currentDef.id === 'feishu' || currentDef.id === 'wecom' || currentDef.id === 'qqbot' ? 'space-y-4' : 'grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5'}
                 onSubmit={e => { e.preventDefault(); handleSave(); }}
               >
                 {currentDef.id === 'feishu'
@@ -3313,8 +3358,33 @@ export default function Channels() {
                     ? (
                       <div className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
-                          {currentDef.configFields.map(field => renderConfigField(currentDef.id, field))}
+                          {qqbotPrimaryFields.map(field => renderConfigField(currentDef.id, field))}
                         </div>
+                        <div className="rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/60 dark:bg-blue-950/20 px-4 py-3 text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+                          官方 QQBot 日常只需要配置 <span className="font-mono">App ID</span> 和 <span className="font-mono">App Secret</span> 即可运行；其余兼容字段请按需在高级选项中开启。
+                        </div>
+                        {qqbotAdvancedFields.length > 0 && (
+                          <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                            <button
+                              type="button"
+                              onClick={() => setQqbotAdvancedOpen(prev => !prev)}
+                              className="w-full flex items-center justify-between gap-3 text-left"
+                            >
+                              <div>
+                                <h4 className="text-sm font-semibold text-gray-900 dark:text-white">高级配置（兼容与定制）</h4>
+                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                                  仅在你明确需要路由控制、兼容老配置或调试场景时再修改。
+                                </p>
+                              </div>
+                              <ChevronDown size={16} className={`text-gray-400 transition-transform ${qqbotAdvancedOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {qqbotAdvancedOpen && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5 pt-2 border-t border-gray-100 dark:border-gray-700">
+                                {qqbotAdvancedFields.map(field => renderConfigField(currentDef.id, field))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )
                   : currentDef.configFields.map(field => renderConfigField(currentDef.id, field))}

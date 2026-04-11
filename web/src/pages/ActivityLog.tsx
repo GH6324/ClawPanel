@@ -43,6 +43,7 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
   const [selectedKey, setSelectedKey] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
+  const [showLowValueSources, setShowLowValueSources] = useState(false);
   const messagePaneRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -68,9 +69,8 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
     void loadSessions();
   }, []);
 
-  const filteredSessions = useMemo(() => sessions.filter((session) => {
+  const searchedSessions = useMemo(() => sessions.filter((session) => {
     const channel = normalizeChannel(session);
-    if (sourceFilter && channel !== sourceFilter) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return [
@@ -82,7 +82,13 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
       session.key,
       sourceLabel(channel),
     ].some(value => String(value || '').toLowerCase().includes(q));
-  }), [sessions, search, sourceFilter]);
+  }), [sessions, search]);
+
+  const filteredSessions = useMemo(() => searchedSessions.filter((session) => {
+    const channel = normalizeChannel(session);
+    if (!sourceFilter) return true;
+    return channel === sourceFilter;
+  }), [searchedSessions, sourceFilter]);
 
   useEffect(() => {
     if (!filteredSessions.length) {
@@ -128,11 +134,42 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
     }
   }, [messages, selectedSession]);
 
-  const channelCounts = useMemo(() => filteredSessions.reduce((acc, session) => {
+  const rawChannelCounts = useMemo(() => searchedSessions.reduce((acc, session) => {
     const channel = normalizeChannel(session);
     acc[channel] = (acc[channel] || 0) + 1;
     return acc;
-  }, {} as Record<string, number>), [filteredSessions]);
+  }, {} as Record<string, number>), [searchedSessions]);
+  const allSourceFilters = useMemo(() => Object.keys(rawChannelCounts).sort(), [rawChannelCounts]);
+  const highValueSourceFilters = useMemo(
+    () => allSourceFilters.filter(channel => !isLowValueSource(channel)),
+    [allSourceFilters],
+  );
+  const lowValueSourceFilters = useMemo(
+    () => allSourceFilters.filter(channel => isLowValueSource(channel)),
+    [allSourceFilters],
+  );
+  const displayChannelCounts = useMemo(
+    () => allSourceFilters
+      .filter(channel => showLowValueSources || !isLowValueSource(channel))
+      .reduce((acc, channel) => {
+        acc[channel] = rawChannelCounts[channel] || 0;
+        return acc;
+      }, {} as Record<string, number>),
+    [allSourceFilters, rawChannelCounts, showLowValueSources],
+  );
+  const channelCounts = displayChannelCounts;
+
+  useEffect(() => {
+    if (!sourceFilter) return;
+    if (channelCounts[sourceFilter]) return;
+    if (isLowValueSource(sourceFilter) && !showLowValueSources) {
+      setSourceFilter('');
+      return;
+    }
+    if (!rawChannelCounts[sourceFilter]) {
+      setSourceFilter('');
+    }
+  }, [channelCounts, rawChannelCounts, showLowValueSources, sourceFilter]);
 
   const messageStats = useMemo(() => messages.reduce((acc, item) => {
     const role = normalizeRole(item.role);
@@ -196,6 +233,14 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索通道、用户、会话或智能体..." className="w-full pl-9 pr-4 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all" />
             </div>
             <div className="flex items-center gap-2">
+              {lowValueSourceFilters.length > 0 && (
+                <button
+                  onClick={() => setShowLowValueSources(prev => !prev)}
+                  className="px-2.5 py-1.5 rounded-lg text-[11px] border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+                >
+                  {showLowValueSources ? '收起低价值分类' : `展开低价值分类 (${lowValueSourceFilters.length})`}
+                </button>
+              )}
               <button onClick={() => { void loadSessions(); refreshLog(); }} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 transition-colors" title={t.common.refresh}><RefreshCw size={14} /></button>
               <button onClick={clearEvents} className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors" title={t.activityLog.clear}><Trash2 size={14} /></button>
             </div>
@@ -204,7 +249,7 @@ function ActivityLogPage({ logEntries, clearEvents, refreshLog }: Props) {
             {[{ key: '', label: '全部会话' }, ...Object.keys(channelCounts).sort().map(key => ({ key, label: sourceLabel(key) }))].map(item => (
               <button key={item.key} onClick={() => setSourceFilter(item.key)} className={`px-3 py-1.5 text-xs rounded-lg transition-all whitespace-nowrap flex items-center gap-1.5 ${sourceFilter === item.key ? 'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300 font-semibold shadow-sm' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/50 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                 {item.label}
-                <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${sourceFilter === item.key ? 'bg-white/50 text-sky-800' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>{item.key ? channelCounts[item.key] || 0 : filteredSessions.length}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${sourceFilter === item.key ? 'bg-white/50 text-sky-800' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>{item.key ? channelCounts[item.key] || 0 : searchedSessions.length}</span>
               </button>
             ))}
           </div>
@@ -350,8 +395,15 @@ function sessionIdentity(session: SessionItem) {
 function normalizeChannel(session: SessionItem) {
   const raw = String(session.lastChannel || session.originProvider || '').trim().toLowerCase();
   if (!raw) return 'agent';
+  if (raw === 'openclaw-weixin' || raw === 'weixin') return 'wechat';
+  if (raw === 'qqbot-community') return 'qqbot';
+  if (raw === 'heartbeat' || raw.startsWith('heartbeat:')) return 'heartbeat';
   if (raw === 'line') return 'line';
   return raw;
+}
+
+function isLowValueSource(source: string) {
+  return source === 'agent' || source === 'heartbeat';
 }
 
 function sessionTitle(session: SessionItem) {
@@ -392,6 +444,7 @@ function sourceColor(source: string) {
     case 'zalouser': return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300';
     case 'wechat': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300';
     case 'signal': return 'bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
+    case 'heartbeat': return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
     case 'system': return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
     case 'workflow': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
     case 'agent': return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
@@ -427,6 +480,7 @@ function sourceLabel(source: string) {
     case 'zalouser': return 'Zalo User';
     case 'wechat': return '微信';
     case 'signal': return 'Signal';
+    case 'heartbeat': return 'Heartbeat';
     case 'workflow': return '工作流';
     case 'system': return '系统';
     case 'agent': return '普通会话';

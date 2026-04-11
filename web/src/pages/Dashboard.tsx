@@ -553,6 +553,14 @@ function dedupeSessionActivity(items: SessionActivityItem[]) {
   return Array.from(map.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
+function normalizeSessionChannel(raw: string) {
+  const channel = String(raw || '').trim().toLowerCase();
+  if (!channel) return 'agent';
+  if (channel === 'openclaw-weixin') return 'wechat';
+  if (channel === 'qqbot-community') return 'qqbot';
+  return channel;
+}
+
 function isSyntheticApprovalCallbackMessage(message: { role?: string; content?: string } | null | undefined) {
   const text = String(message?.content || '').trim().toLowerCase();
   if (!text) return false;
@@ -574,22 +582,18 @@ function buildRecentFeed(logs: LogEntry[], sessions: SessionActivityItem[]): Rec
     detail: entry.detail || entry.summary || '',
   }));
 
-  const covered = new Set<string>();
-  logs.forEach((entry) => {
-    const text = `${entry.summary}\n${entry.detail || ''}`.toLowerCase();
-    sessions.forEach((session) => {
-      const label = String(session.originLabel || session.lastTo || '').toLowerCase();
-      if (!label) return;
-      if (text.includes(label)) {
-        covered.add(`${session.agentId || 'main'}:${session.sessionId}`);
-      }
-    });
-  });
+  const normalizeForFingerprint = (text: string) => String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180)
+    .toLowerCase();
+  const seenFingerprint = new Set(
+    feed.map(item => `${item.source}|${Math.floor(item.time / 5000)}|${normalizeForFingerprint(item.summary)}`),
+  );
 
   sessions.forEach((session) => {
     const key = `${session.agentId || 'main'}:${session.sessionId}`;
-    if (covered.has(key)) return;
-    const channel = session.lastChannel || session.originProvider || 'agent';
+    const channel = normalizeSessionChannel(session.lastChannel || session.originProvider || 'agent');
     const recentMessages = Array.isArray(session.recentMessages) ? session.recentMessages : [];
     if (recentMessages.length > 0) {
       let skipNextAssistantReply = false;
@@ -610,6 +614,9 @@ function buildRecentFeed(logs: LogEntry[], sessions: SessionActivityItem[]): Rec
         const source = role === 'assistant' ? 'openclaw' : channel;
         const content = String(msg.content || '').trim();
         if (!content) return;
+        const fingerprint = `${source}|${Math.floor((Number.isFinite(ts) ? ts : (session.updatedAt || 0)) / 5000)}|${normalizeForFingerprint(content)}`;
+        if (seenFingerprint.has(fingerprint)) return;
+        seenFingerprint.add(fingerprint);
         feed.push({
           id: `session:${key}:${msg.id || idx}`,
           time: Number.isFinite(ts) ? ts : (session.updatedAt || 0),

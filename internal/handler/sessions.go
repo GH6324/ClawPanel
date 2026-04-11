@@ -293,7 +293,7 @@ func extractMessage(entry map[string]interface{}) map[string]interface{} {
 
 	role, _ := msg["role"].(string)
 	role = strings.TrimSpace(role)
-	if role != "user" && role != "system" {
+	if role != "user" && role != "system" && role != "assistant" {
 		return nil
 	}
 	content := cleanSessionMessageText(extractTextContent(msg["content"]), role)
