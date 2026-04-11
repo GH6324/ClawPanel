@@ -664,6 +664,7 @@ const FEISHU_OFFICIAL_IDS = ['openclaw-lark'] as const;
 const FEISHU_ALL_IDS = ['openclaw-lark', 'feishu'] as const;
 const WECOM_BOT_PLUGIN_IDS = ['wecom-openclaw-plugin', 'wecom'] as const;
 const QQBOT_PLUGIN_IDS = ['qqbot', 'qqbot-community'] as const;
+type QQBotVariant = 'builtin' | 'community';
 
 function getEnabledPluginEntry(entries: Record<string, any>, ids: readonly string[]): string | null {
   for (const id of ids) {
@@ -674,6 +675,14 @@ function getEnabledPluginEntry(entries: Record<string, any>, ids: readonly strin
 
 function isQQBotPluginInstalled(installedPlugins: any[]) {
   return installedPlugins.some((p: any) => (QQBOT_PLUGIN_IDS as readonly string[]).includes(p.id));
+}
+
+function getActiveQQBotVariant(ocConfig: any): QQBotVariant {
+  const entries = ocConfig?.plugins?.entries || {};
+  if (entries['qqbot-community']?.enabled) return 'community';
+  if (entries['qqbot']?.enabled) return 'builtin';
+  if (entries['qqbot-community']) return 'community';
+  return 'builtin';
 }
 
 function getWecomConnectionMode(cfg: any): 'callback' | 'long-polling' {
@@ -857,6 +866,7 @@ export default function Channels() {
   const [channelDrafts, setChannelDrafts] = useState<Record<string, any>>({});
   const [channelFieldTextDrafts, setChannelFieldTextDrafts] = useState<Record<string, string>>({});
   const [qqbotAdvancedOpen, setQqbotAdvancedOpen] = useState(false);
+  const [switchingQQBotVariant, setSwitchingQQBotVariant] = useState(false);
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
   const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
   const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
@@ -1260,6 +1270,8 @@ export default function Channels() {
   const currentWecomConfig = getEffectiveChannelConfig('wecom');
   const currentWecomMode = getWecomConnectionMode(currentWecomConfig);
   const currentWecomEntryId = getEnabledPluginEntry(ocPlugins, WECOM_BOT_PLUGIN_IDS) || (ocPlugins['wecom-openclaw-plugin'] ? 'wecom-openclaw-plugin' : (ocPlugins['wecom'] ? 'wecom' : 'wecom-openclaw-plugin'));
+  const currentQQBotVariant = getActiveQQBotVariant(ocConfig);
+  const currentQQBotPluginEntryId = currentQQBotVariant === 'community' ? 'qqbot-community' : 'qqbot';
 
   const handleWecomModeChange = (mode: 'callback' | 'long-polling') => {
     updateChannelDraft('wecom', draft => {
@@ -1601,6 +1613,8 @@ export default function Channels() {
       if (currentDef.id === 'feishu') {
         const entryId = getFeishuPluginEntryId(ocConfig);
         await api.updatePlugin(entryId, { enabled: enabledState });
+      } else if (currentDef.id === 'qqbot') {
+        await api.updatePlugin(currentQQBotPluginEntryId, { enabled: enabledState });
       } else if (currentDef.id === 'wecom') {
         await api.updatePlugin(currentWecomEntryId, { enabled: enabledState });
       } else if (currentDef.id === 'wecom-app') {
@@ -1634,6 +1648,25 @@ export default function Channels() {
       reload();
       setTimeout(() => setMsg(''), 5000);
     } catch (err) { setMsg('切换失败: ' + String(err)); setTimeout(() => setMsg(''), 3000); }
+  };
+  const handleSwitchQQBotVariant = async (variant: QQBotVariant) => {
+    if (variant === currentQQBotVariant || switchingQQBotVariant) return;
+    setSwitchingQQBotVariant(true);
+    try {
+      const r = await api.switchQQBotVariant(variant);
+      if (r?.ok) {
+        setMsg(r.message || 'QQ å®˜æ–¹æœºå™¨äººç‰ˆæœ¬å·²åˆ‡æ¢');
+      } else {
+        setMsg(r?.error || 'QQ å®˜æ–¹æœºå™¨äººç‰ˆæœ¬åˆ‡æ¢å¤±è´¥');
+      }
+      reload();
+      setTimeout(() => setMsg(''), 5000);
+    } catch (err) {
+      setMsg('QQ å®˜æ–¹æœºå™¨äººç‰ˆæœ¬åˆ‡æ¢å¤±è´¥: ' + String(err));
+      setTimeout(() => setMsg(''), 5000);
+    } finally {
+      setSwitchingQQBotVariant(false);
+    }
   };
   // === QQ Login handlers ===
   const handleQRLogin = async (channelId = currentDef?.id || selectedChannel) => {
@@ -3357,6 +3390,38 @@ export default function Channels() {
                   : currentDef.id === 'qqbot'
                     ? (
                       <div className="space-y-4">
+                        <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4">
+                          <div className="flex items-center justify-between gap-4 flex-wrap">
+                            <div>
+                              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">QQBot é€šé“ç‰ˆæœ¬</h4>
+                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                                å¯åœ¨å†…ç½®ç‰ˆä¸Žç¤¾åŒºç‰ˆä¹‹é—´åˆ‡æ¢ï¼Œä¼šè‡ªåŠ¨å¯ç”¨å½“å‰ç‰ˆæœ¬å¹¶å³é—­å¦ä¸€ä¸ªã€‚
+                              </p>
+                            </div>
+                            <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-1">
+                              <button
+                                type="button"
+                                onClick={() => handleSwitchQQBotVariant('builtin')}
+                                disabled={switchingQQBotVariant}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${currentQQBotVariant === 'builtin'
+                                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                              >
+                                å†…ç½®ç‰ˆ
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSwitchQQBotVariant('community')}
+                                disabled={switchingQQBotVariant}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${currentQQBotVariant === 'community'
+                                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                              >
+                                ç¤¾åŒºç‰ˆ
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
                           {qqbotPrimaryFields.map(field => renderConfigField(currentDef.id, field))}
                         </div>
